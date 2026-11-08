@@ -943,20 +943,42 @@ def assess(state, ls):
             f"{z.get('last-sync')}（{ago(age)}）" + ("，已追平服务器" if z.get("caught-up") else "，尚未追平"))
     up = summ.get("sync_up_scheduled") or 0
     items = S.items
-    stuck = 0
-    if items:
+    if up and items:
+        # 已核实的无害模式：App 资料库的空 Documents 占位目录，资料库自己标着 no-documents，
+        # bird 有预算、状态 ready 却从不尝试——是它主动跳过，不是传不上去。
+        libs = {l["id"]: l for l in summ.get("app_libraries") or []}
+        benign, stuck, failing = 0, 0, 0
         for r in items["queues"]["rows"]:
-            if r.get("kind") == "sync-up" and r.get("attempts", 1) == 0 and "h ago" in (r.get("last") or ""):
+            if r.get("kind") != "sync-up":
+                continue
+            lib = libs.get(r.get("c")) or {}
+            if r.get("t") == "dir" and str(r.get("id", "")).startswith("documents[") and not r.get("sz") \
+                    and "no-documents" in lib.get("flags", []):
+                benign += 1
+                continue
+            if r.get("attempts", 0) >= 3:
+                failing += 1
+            hrs = None
+            if "h ago" in (r.get("last") or ""):
                 try:
-                    if float(r["last"].split("h")[0]) > 24:
-                        stuck += 1
+                    hrs = float(r["last"].split("h")[0])
                 except ValueError:
                     pass
-    if up:
-        msg = f"{up} 个条目排队待上传"
+            if hrs and hrs > 24:
+                stuck += 1
+        real = up - benign
+        parts = []
+        if benign:
+            parts.append(f"{benign} 个是 App 资料库的空 Documents 占位目录（资料库标着 no-documents，bird 主动跳过，无害）")
+        if real > 0:
+            parts.append(f"{real} 个真正待上传")
         if stuck:
-            msg += f"，其中 {stuck} 个排了超过 24 小时且从未尝试（多为各 App 的 Documents 目录元数据，通常无害）"
-        add("warn" if stuck or up > 500 else "ok", "待上传队列", msg)
+            parts.append(f"其中 {stuck} 个已排队超过 24 小时")
+        if failing:
+            parts.append(f"{failing} 个已重试 3 次以上")
+        add("warn" if (stuck or failing or real > 500) else "ok", "待上传队列", f"共 {up} 个：" + "；".join(parts))
+    elif up:
+        add("ok", "待上传队列", f"{up} 个条目排队待上传（完整 dump 完成后会细分）")
     else:
         add("ok", "待上传队列", "空")
     e10 = ls.get("errors10m", 0)
