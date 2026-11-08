@@ -679,6 +679,159 @@ def summarize_items(items, kind, now):
     return c
 
 
+# ---------------------------------------------------------------- 名称还原（macOS 26 的 {n} 脱敏）
+# 思路：dump 里的 “D{7}s” 只保留首尾字符和中间长度，无法直接反推；但本机的真实文件就在
+# ~/Library/Mobile Documents 下。按条目的父目录链逐级 listdir，只在同一目录内用
+# “首尾字符 + 长度” 规则比对，就能唯一对上真实名称。只读：只 listdir / lstat，不打开文件；
+# 遇到云端占位（dataless）目录不列（列它可能触发 fileproviderd 拉取目录），标为未解析。
+MOBILE_DOCS = os.path.join(HOME, "Library/Mobile Documents")
+SF_DATALESS = 0x40000000
+REDACT_TOKEN = re.compile(r"(\{\d+\})")
+
+
+def redaction_regex(red):
+    out = ""
+    for tok in REDACT_TOKEN.split(red):
+        if not tok:
+            continue
+        m = re.fullmatch(r"\{(\d+)\}", tok)
+        out += f".{{{m.group(1)}}}" if m else re.escape(tok)
+    return re.compile("^" + out + "$", re.S)
+
+
+def _forms(name):
+    import unicodedata
+    seen = []
+    for f in (name, unicodedata.normalize("NFC", name), unicodedata.normalize("NFD", name)):
+        if f not in seen:
+            seen.append(f)
+        b = f.encode("utf-16-le", "surrogatepass")   # NSString 按 UTF-16 计长度（emoji 占 2）
+        u16 = "".join(chr(int.from_bytes(b[i:i + 2], "little")) for i in range(0, len(b), 2))
+        if u16 not in seen:
+            seen.append(u16)
+    return seen
+
+
+def redaction_match(rx, name):
+    return any(rx.match(f) for f in _forms(name))
+
+
+class Resolver:
+    def __init__(self, items):
+        self.by_id = {}
+        for i in items:
+            self.by_id.setdefault((i["c"], i["id"]), i)
+        self.ls_cache = {}
+        self.path_cache = {}
+        self.cont_cache = {}
+        self.stats = collections.Counter()
+        try:
+            self.md = {f.replace("~", "."): f for f in os.listdir(MOBILE_DOCS)}
+        except OSError:
+            self.md = {}
+
+    def container(self, cn):
+        if cn in self.cont_cache:
+            return self.cont_cache[cn]
+        if not cn:
+            return None
+        if "{" not in cn:
+            hit = [cn] if cn in self.md else []
+        else:
+            rx = redaction_regex(cn)
+            hit = [d for d in self.md if redaction_match(rx, d)]
+        r = {"real": hit[0], "path": os.path.join(MOBILE_DOCS, self.md[hit[0]])} if len(hit) == 1 else \
+            {"real": None, "candidates": hit[:5]}
+        self.cont_cache[cn] = r
+        return r
+
+    def listdir(self, path):
+        if path in self.ls_cache:
+            return self.ls_cache[path]
+        res = None
+        try:
+            st = os.lstat(path)
+            if st.st_flags & SF_DATALESS:
+                res = "dataless"
+            else:
+                with os.scandir(path) as it:
+                    res = [(e.name, e.is_dir(follow_symlinks=False), e.is_symlink()) for e in it]
+        except OSError:
+            res = None
+        self.ls_cache[path] = res
+        return res
+
+    def path(self, item, depth=0):
+        """返回 (状态, 真实路径或说明)。状态：ok / ambiguous / dataless / missing / unknown"""
+        key = (item["c"], item["id"])
+        if key in self.path_cache:
+            return self.path_cache[key]
+        r = self._path(item, depth)
+        self.path_cache[key] = r
+        return r
+
+    def _path(self, item, depth):
+        if depth > 60:
+            return ("unknown", "层级过深")
+        if item["id"].startswith("root["):
+            c = self.container(item["cn"])
+            return ("ok", c["path"]) if c and c.get("path") else ("unknown", "找不到资料库目录")
+        par = self.by_id.get((item["c"], item.get("parent")))
+        if not par:
+            return ("unknown", "父目录不在 client.db 里")
+        st, ppath = self.path(par, depth + 1)
+        if st != "ok":
+            return (st, ppath)
+        entries = self.listdir(ppath)
+        if entries == "dataless":
+            return ("dataless", ppath)
+        if entries is None:
+            return ("missing", ppath)
+        name = item.get("n") or ""
+        if "{" not in name:
+            hits = [e for e in entries if e[0] in _forms(name) or name in _forms(e[0])]
+        else:
+            rx = redaction_regex(name)
+            hits = [e for e in entries if redaction_match(rx, e[0])]
+        if len(hits) > 1:   # 同目录撞车：用类型、再用大小区分
+            want_dir = item.get("t") == "dir"
+            hits = [e for e in hits if e[1] == want_dir] or hits
+        if len(hits) > 1 and item.get("sz") is not None:
+            sized = []
+            for e in hits:
+                try:
+                    if os.lstat(os.path.join(ppath, e[0])).st_size == item["sz"]:
+                        sized.append(e)
+                except OSError:
+                    pass
+            hits = sized or hits
+        if len(hits) == 1:
+            return ("ok", os.path.join(ppath, hits[0][0]))
+        if hits:
+            return ("ambiguous", " | ".join(h[0] for h in hits[:4]))
+        return ("missing", ppath)
+
+    def annotate(self, row):
+        """给要展示的条目加 real（真实名）/ rpath（相对 Mobile Documents 的路径）/ rs（解析状态）"""
+        if not row or "id" not in row or row.get("_done"):
+            return row
+        it = self.by_id.get((row.get("c"), row.get("id")))
+        c = self.container(row.get("cn"))
+        if c and c.get("real"):
+            row["rcn"] = c["real"]
+        if it:
+            st, val = self.path(it)
+            self.stats[st] += 1
+            row["rs"] = st
+            if st == "ok":
+                row["real"] = os.path.basename(val)
+                row["rpath"] = os.path.relpath(val, MOBILE_DOCS)
+            elif st == "ambiguous":
+                row["cands"] = val
+        row["_done"] = True
+        return row
+
+
 def analyze_full(text):
     now = time.time()
     si = text.find("\n    server items")
@@ -724,12 +877,34 @@ def analyze_full(text):
                          "only_server": len(os_), "only_client": len(oc)})
             only_s += [sname[(cid, x)] for x in list(os_)[:20]]
             only_c += [cname[(cid, x)] for x in list(oc)[:20]]
-    keep = lambda i: {k: i.get(k) for k in ("id", "n", "t", "sz", "mt", "cn", "up", "sc", "subs")}
+    keep = lambda i: {k: i.get(k) for k in ("id", "n", "t", "sz", "mt", "cn", "c", "up", "sc", "subs")}
     r["diff"] = {"containers": sorted(diff, key=lambda d: -(d["only_server"] + d["only_client"])),
                  "only_server": [keep(i) for i in only_s[:100]],
                  "only_client": [keep(i) for i in only_c[:100]],
                  "only_server_total": sum(d["only_server"] for d in diff),
                  "only_client_total": sum(d["only_client"] for d in diff)}
+    # 名称还原：只对页面上展示的条目做（几百条），不扫全库
+    t0 = time.time()
+    res = Resolver(client)
+    shown = []
+    for k in ("largest", "recent", "recent_used", "trash"):
+        shown += r["client"].get(k) or []
+    shown += r["queues"]["rows"] + r["diff"]["only_client"]
+    for row in shown:
+        res.annotate(row)
+        row.pop("_done", None)
+    for row in r["server"].get("largest", []) + r["server"].get("recent", []) + r["diff"]["only_server"]:
+        c = res.container(row.get("cn"))
+        if c and c.get("real"):
+            row["rcn"] = c["real"]
+    names = {}
+    for cont in r["client"]["containers"] + r["server"]["containers"] + r["diff"]["containers"]:
+        c = res.container(cont.get("name"))
+        if c and c.get("real"):
+            names[cont["name"]] = c["real"]
+    r["names"] = {"containers": names, "stats": dict(res.stats), "listed_dirs": len(res.ls_cache),
+                  "skipped_dataless": sum(1 for v in res.ls_cache.values() if v == "dataless"),
+                  "took": round(time.time() - t0, 2)}
     return r
 
 

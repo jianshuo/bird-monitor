@@ -147,6 +147,7 @@ details summary { cursor: pointer; }
       <span class="chip" id="updated">—</span>
       <button id="btnSummary" title="立即重新执行 brctl dump -i（约 1 秒）">刷新概要</button>
       <button id="btnFull" title="立即重新执行完整 brctl dump（约 20 秒，读取 client.db / server.db 的全部条目）">重新完整 dump</button>
+      <button id="btnNames" title="名称显示：本机还原的真实名称 / brctl 输出的脱敏名称（截图分享前可切回脱敏）">真名</button>
       <button id="btnTheme" title="切换浅色/深色">◐</button>
     </div>
     <nav class="tabs" id="tabs">
@@ -323,7 +324,7 @@ details summary { cursor: pointer; }
       <div class="card"><h3>监控器自身状态</h3><div id="selfErr"></div></div>
     </div>
   </section>
-  <div class="foot">本页只连本机 127.0.0.1；所有数据只在内存里，不落盘。名称里的 <code>{n}</code> 是 macOS 26 起自带的隐私脱敏（保留首尾字符，中间 n 个字符隐藏）；macOS 15 及更早的 dump 输出明文名称。</div>
+  <div class="foot">本页只连本机 127.0.0.1；所有数据只在内存里，不落盘。名称里的 <code>{n}</code> 是 macOS 26 起自带的隐私脱敏（保留首尾字符，中间 n 个字符隐藏）；本页的「真名」是在本机文件系统里比对还原的，只显示在你自己的浏览器里。</div>
 </main>
 <div class="tip" id="tip"></div>
 
@@ -487,9 +488,22 @@ function table(cols, rows, empty = "暂无") {
   if (!rows.length) return `<div class="empty">${empty}</div>`;
   return `<table><thead><tr>${cols.map(c => `<th class="${c.num ? "num" : ""}">${esc(c.h)}</th>`).join("")}</tr></thead><tbody>${rows.map(r => `<tr>${cols.map(c => `<td class="${c.num ? "num" : ""} ${c.mono ? "mono" : ""}">${c.html ? c.f(r) : esc(c.f(r))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
 }
+let showReal = true;
+try { showReal = localStorage.getItem("bm-names") !== "redacted"; } catch (e) { }
+const CN = cn => (showReal && IT && IT.names && IT.names.containers[cn]) || cn || "";
+const RS_TXT = { missing: "本地无文件", dataless: "未下载（占位目录，未列）", unknown: "无法定位", ambiguous: "歧义" };
+function RN(r) {
+  const red = r.n || r.id || "";
+  if (!showReal) return esc(red);
+  if (r.real) return `<span title="脱敏名：${esc(red)}&#10;路径：${esc(r.rpath || "")}">${esc(r.real)}</span>`;
+  if (r.rs && r.rs !== "ok") return `${esc(red)} <span class="flag" title="${esc(r.cands || RS_TXT[r.rs] || r.rs)}">${esc(RS_TXT[r.rs] || r.rs)}</span>`;
+  return esc(red);
+}
+const RC = r => esc(showReal ? (r.rcn || CN(r.cn)) : (r.cn || ""));
+const nameH = () => showReal ? "名称" : "名称（脱敏）";
 const fileCols = (extra = []) => [
-  { h: "名称（脱敏）", f: r => r.n || r.id, mono: true },
-  { h: "资料库", f: r => r.cn || "", mono: true },
+  { h: nameH(), html: true, f: RN, mono: true },
+  { h: "资料库", html: true, f: RC, mono: true },
   { h: "大小", f: r => fmtBytes(r.sz), num: true },
   ...extra,
 ];
@@ -635,6 +649,7 @@ function renderSafety() {
     ["禁用危险参数", "绝不使用 dump -d（直接读库文件）、dump -u（升级数据库）以及 diagnose 等会写盘或打包的命令。"],
     ["只读命令", "ps、nettop、lsof、/usr/bin/log、brctl status/quota/accounts/dump，以及 libproc 的 proc_pid_rusage（读进程计数器）。"],
     ["不打扰 bird", `所有 brctl 调用串行执行；概要每 ${(s.intervals || {}).summary || 60} 秒一次（约 1 秒），完整 dump 每 ${((s.intervals || {}).full || 3600) / 60} 分钟一次（bird 满载约 20 秒，图上黄色阴影标出），可手动触发；brctl quota 会让 bird 向 iCloud 发一次配额请求，所以只 ${((s.intervals || {}).quota || 1800) / 60} 分钟查一次，并在操作列表里标为「本监控器触发」。`],
+    ["名称还原也只读", "把 macOS 26 的脱敏名还原成真名时，只对 ~/Library/Mobile Documents 下的目录做 ls（scandir）和 lstat，不打开任何文件；遇到云端占位（dataless）目录不列，避免触发下载；只解析页面上展示的几百条，不扫全库。"],
     ["不外传", "HTTP 只监听 127.0.0.1；数据只在内存中；push token、change token、record name 在展示前隐藏。"],
   ];
   $("#principles").innerHTML = P.map(([t, m]) => `<div class="check"><div class="ico ok">✓</div><div><div class="t">${esc(t)}</div><div class="m">${esc(m)}</div></div></div>`).join("");
@@ -651,13 +666,13 @@ function renderLibs() {
   const libs = (ST.summary || {}).app_libraries || [];
   const cont = {}; ((IT && IT.client.containers) || []).forEach(c => cont[c.id] = c);
   const q = libQ.toLowerCase();
-  const rows = libs.filter(l => !q || JSON.stringify(l).toLowerCase().includes(q)).sort((a, b) => ((cont[b.id] || {}).count || 0) - ((cont[a.id] || {}).count || 0));
+  const rows = libs.filter(l => !q || (JSON.stringify(l) + CN(l.name)).toLowerCase().includes(q)).sort((a, b) => ((cont[b.id] || {}).count || 0) - ((cont[a.id] || {}).count || 0));
   $("#libCount").textContent = `${rows.length} / ${libs.length} 个资料库（按条目数排序）`;
-  const key = q + rows.length + itemsVer;
+  const key = q + rows.length + itemsVer + showReal;
   if ($("#libs").dataset.key === key) return; $("#libs").dataset.key = key;
   $("#libs").innerHTML = table([
     { h: "ID", f: r => r.id, num: true },
-    { h: "资料库", f: r => r.name, mono: true },
+    { h: "资料库", f: r => CN(r.name), mono: true },
     { h: "条目", f: r => fmtNum((cont[r.id] || {}).count), num: true },
     { h: "占用", f: r => fmtBytes((cont[r.id] || {}).bytes), num: true },
     { h: "状态标记", html: true, f: r => `<span class="flag b">${esc(r.state)}</span>` + r.flags.map(x => `<span class="flag">${esc(x)}</span>`).join("") + r.zone_flags.map(x => `<span class="flag b">${esc(x)}</span>`).join("") },
@@ -695,7 +710,8 @@ function renderLogChart() {
 function renderItems() {
   if (!IT) return;
   const c = IT.client, sv = IT.server, s = ST || { now: Date.now() / 1000 };
-  $("#dbNote").innerHTML = `client.db / server.db 的内容通过 <code>brctl dump</code> 由正在运行的 bird 自己读取后输出，本工具从不打开数据库文件。本次快照：${dstr(IT.taken)}，bird 输出 ${fmtBytes(IT.dump_bytes)}（${fmtNum(IT.dump_lines)} 行），dump 耗时 ${IT.took_dump}s，解析 ${IT.took_parse}s。`;
+  $("#dbNote").innerHTML = `client.db / server.db 的内容通过 <code>brctl dump</code> 由正在运行的 bird 自己读取后输出，本工具从不打开数据库文件。本次快照：${dstr(IT.taken)}，bird 输出 ${fmtBytes(IT.dump_bytes)}（${fmtNum(IT.dump_lines)} 行），dump 耗时 ${IT.took_dump}s，解析 ${IT.took_parse}s。` +
+    (IT.names ? `<br>名称还原：在 ~/Library/Mobile Documents 里逐级 ls、按「首尾字符＋长度」比对真实文件名（只读，不打开文件，跳过云端占位目录）。展示的条目中还原 ${fmtNum((IT.names.stats || {}).ok || 0)} 条，本地无文件 ${fmtNum((IT.names.stats || {}).missing || 0)} 条，歧义 ${fmtNum((IT.names.stats || {}).ambiguous || 0)} 条；资料库名还原 ${fmtNum(Object.keys(IT.names.containers || {}).length)} 个；列了 ${IT.names.listed_dirs} 个目录，耗时 ${IT.names.took}s。右上角「真名」可切回脱敏名。` : "");
   const tiles = [
     ["client.db 条目", fmtNum(c.total), `文件 ${fmtNum((c.by_type.doc || 0) + (c.by_type.pkg || 0))} · 目录 ${fmtNum(c.by_type.dir)}`],
     ["server.db 条目", fmtNum(sv.total), `文件 ${fmtNum((sv.by_type.doc || 0) + (sv.by_type.pkg || 0))} · 目录 ${fmtNum(sv.by_type.dir)}`],
@@ -733,14 +749,14 @@ function renderItems() {
   hbars($("#qKinds"), Object.entries(qk).map(([k, v]) => ({ label: k, value: v })), { color: "--s2" });
   if (!Object.keys(qk).length) $("#qKinds").innerHTML = '<div class="empty">没有挂起的子任务</div>';
   $("#qRows").innerHTML = table([
-    { h: "任务", f: r => r.kind }, { h: "名称（脱敏）", f: r => r.n || r.id, mono: true }, { h: "类型", f: r => tn[r.t] || r.t },
-    { h: "资料库", f: r => r.cn, mono: true }, { h: "状态", f: r => r.state || "" }, { h: "尝试", f: r => r.attempts ?? "", num: true },
+    { h: "任务", f: r => r.kind }, { h: nameH(), html: true, f: RN, mono: true }, { h: "类型", f: r => tn[r.t] || r.t },
+    { h: "资料库", html: true, f: RC, mono: true }, { h: "本机路径", f: r => showReal ? (r.rpath || "") : "", mono: true }, { h: "状态", f: r => r.state || "" }, { h: "尝试", f: r => r.attempts ?? "", num: true },
     { h: "上次", f: r => hoursAgo(r.last), num: true }, { h: "下次", f: r => r.next || "" }, { h: "原文", f: r => r.detail, mono: true },
   ], IT.queues.rows);
   const df = IT.diff;
   $("#diffSum").innerHTML = `<div class="tiles" style="grid-template-columns:repeat(2,1fr);margin-bottom:8px"><div class="tile"><div class="k">只在本地</div><div class="v">${fmtNum(df.only_client_total)}</div><div class="s">client 有、server 没有</div></div><div class="tile"><div class="k">只在服务器</div><div class="v">${fmtNum(df.only_server_total)}</div><div class="s">server 有、client 没有</div></div></div>` +
     (df.containers.length ? `<div class="desc">涉及 ${df.containers.length} 个资料库</div>` : '<div class="empty">两边完全一致</div>');
-  const dcols = [{ h: "名称（脱敏）", f: r => r.n || r.id, mono: true }, { h: "类型", f: r => tn[r.t] || r.t }, { h: "资料库", f: r => r.cn, mono: true }, { h: "状态", f: r => r.up || "" }, { h: "子任务", f: r => (r.subs || []).join(",") }];
+  const dcols = [{ h: nameH(), html: true, f: RN, mono: true }, { h: "类型", f: r => tn[r.t] || r.t }, { h: "资料库", html: true, f: RC, mono: true }, { h: "状态", f: r => r.up || "" }, { h: "子任务", f: r => (r.subs || []).join(",") }];
   $("#onlyClient").innerHTML = table(dcols, df.only_client, "没有");
   $("#onlyServer").innerHTML = table(dcols, df.only_server, "没有");
   renderLibs();
@@ -748,7 +764,7 @@ function renderItems() {
 function renderContainers() {
   if (!IT) return;
   const rows = IT.client.containers.slice().sort((a, b) => b[contMode] - a[contMode]).slice(0, 20);
-  hbars($("#containers"), rows.map(r => ({ label: `${r.name}[${r.id}]`, value: r[contMode], sub: contMode === "count" ? fmtBytes(r.bytes) : fmtNum(r.count) + " 条" })), { fmt: contMode === "bytes" ? fmtBytes : fmtNum });
+  hbars($("#containers"), rows.map(r => ({ label: `${CN(r.name)}[${r.id}]`, value: r[contMode], sub: contMode === "count" ? fmtBytes(r.bytes) : fmtNum(r.count) + " 条" })), { fmt: contMode === "bytes" ? fmtBytes : fmtNum });
 }
 function renderExts() {
   if (!IT) return;
@@ -793,6 +809,13 @@ $("#btnTheme").onclick = () => {
   render(); renderCharts(); renderItems();
 };
 try { const t = localStorage.getItem("bm-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) { }
+function syncNamesBtn() { $("#btnNames").textContent = showReal ? "真名" : "脱敏"; $("#btnNames").classList.toggle("on", showReal); }
+syncNamesBtn();
+$("#btnNames").onclick = () => {
+  showReal = !showReal; syncNamesBtn();
+  try { localStorage.setItem("bm-names", showReal ? "real" : "redacted"); } catch (e) { }
+  $("#libs").dataset.key = ""; renderItems(); render();
+};
 $("#contMode").onclick = e => { const m = e.target.dataset.m; if (!m) return; contMode = m; $$("#contMode button").forEach(b => b.classList.toggle("on", b.dataset.m === m)); renderContainers(); };
 $("#extMode").onclick = e => { const m = e.target.dataset.m; if (!m) return; extMode = m; $$("#extMode button").forEach(b => b.classList.toggle("on", b.dataset.m === m)); renderExts(); };
 $("#libQ").oninput = e => { libQ = e.target.value; renderLibs(); };
