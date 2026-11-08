@@ -12,6 +12,18 @@ bird-monitor status     # 看是否在运行
 bird-monitor stop | restart
 ```
 
+### 看另一台 Mac（远程）
+
+```bash
+bird-monitor pro sync     # 把代码 rsync 到远程 ~/code/bird-monitor 并（重）启动，建好 SSH 隧道
+bird-monitor pro          # 确保远程在跑 + 隧道 + 打开 http://127.0.0.1:8791/
+bird-monitor pro status   # 远程服务和隧道状态
+bird-monitor pro stop     # 关隧道并停掉远程服务
+```
+
+远程的监控器同样只监听它自己的 127.0.0.1，本机经 `ssh -L` 隧道访问，不对网络开放。远程主机默认是 ssh 别名 `pro`，
+可用 `BIRD_MONITOR_REMOTE=<ssh 主机>` 改；本机隧道端口默认 8791（`BIRD_MONITOR_TUNNEL_PORT`）。需要免密 SSH。
+
 - 端口默认 8790，可用 `BIRD_MONITOR_PORT=xxxx` 修改
 - 日志：`~/Library/Logs/BirdMonitor.log`
 - 只依赖 macOS 自带命令和 Python 3 标准库
@@ -40,7 +52,7 @@ bird-monitor stop | restart
 5. **不打扰 bird**：brctl 调用串行执行；概要 60 秒一次（约 1 秒）；完整 dump 60 分钟一次（bird 满载约 20 秒，图上用黄色阴影标出），可手动触发；`brctl quota` 会让 bird 向 iCloud 发一次配额请求，所以 30 分钟才查一次，并在操作列表里标为「本监控器触发」。
 6. **不外传**：只监听 127.0.0.1，数据只在内存，push token / change token / record name 在展示前隐藏。
 
-名称里的 `{n}` 是 macOS 自带的隐私脱敏（保留首尾字符，中间 n 个字符隐藏），监控器无法、也不尝试还原。
+名称里的 `{n}` 是 macOS 26 起 `brctl dump` 自带的隐私脱敏（保留首尾字符，中间 n 个字符隐藏），监控器无法、也不尝试还原；macOS 15 及更早输出明文名称（只显示在本机页面上）。已在 macOS 15.7 和 26.4 上验证。
 
 ## 开发
 

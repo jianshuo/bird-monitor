@@ -30,6 +30,21 @@ DB_DIR = os.path.join(HOME, "Library/Application Support/CloudDocs/session/db")
 SESSION_DIR = os.path.dirname(DB_DIR)
 PORT = int(os.environ.get("BIRD_MONITOR_PORT", "8790"))
 
+
+def _host():
+    try:
+        out = subprocess.run(["scutil", "--get", "ComputerName"], capture_output=True, timeout=5).stdout.decode().strip()
+        if out:
+            return out
+    except Exception:  # noqa
+        pass
+    import socket
+    return socket.gethostname().split(".")[0]
+
+
+HOST = _host()
+OS_VERSION = subprocess.run(["sw_vers", "-productVersion"], capture_output=True).stdout.decode().strip()
+
 INTERVAL = {
     "proc": 2, "net": 5, "files": 5, "lsof": 15, "status": 60,
     "summary": 60, "quota": 1800, "full": 3600,
@@ -440,7 +455,8 @@ def parse_summary(text):
                  "detail": parse_brace_state(m.group(4))} if m else None
 
     libs = []
-    for m in re.finditer(r"\+ app library: <(.+?)\[(\d+)\]\s+(\w+)\s+\{s:([^}]*)\}(.*?)>\s*\n\s+\+ (\w+) clients:\n((?:\s{12}.*\n)*)", text):
+    # macOS 26 每个资料库后面跟 “+ foreground clients:” 子块；macOS 15 没有，所以子块可选
+    for m in re.finditer(r"\+ app library: <(.+?)\[(\d+)\]\s+(\w+)\s+\{s:([^}]*)\}(.*?)>[ \t]*\n(?:\s+\+ (\w+) clients:\n((?:\s{12}.*\n)*))?", text):
         rest = m.group(5)
         apps = braced(rest, "apps:")
         bundles = braced(rest, "bundles:")
@@ -454,7 +470,7 @@ def parse_summary(text):
             "bundles": [b.strip() for b in bundles.split(",") if b.strip()] if bundles else [],
             "etag": etag.group(1) if etag else None, "metadata": meta.group(1) if meta else None,
             "zone_flags": flags.group(1).split("|") if flags else [],
-            "clients": [c.strip().rstrip("]") for c in m.group(7).splitlines() if c.strip()],
+            "clients": [c.strip().rstrip("]") for c in (m.group(7) or "").splitlines() if c.strip()],
         })
     r["app_libraries"] = libs
 
@@ -1105,6 +1121,8 @@ class H(BaseHTTPRequestHandler):
             state["doing"] = doing_now(state, ls)
             state["logstats"] = ls
             state["now"] = time.time()
+            state["host"] = HOST
+            state["os_version"] = OS_VERSION
             state["intervals"] = INTERVAL
             state["commands"] = [{"cmd": k, "n": v} for k, v in COMMANDS_USED.items()]
             return self.send(200, state)

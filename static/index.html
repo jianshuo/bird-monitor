@@ -141,7 +141,7 @@ details summary { cursor: pointer; }
 <header class="top">
   <div class="wrap">
     <div class="bar">
-      <div class="brand">BiRD Monitor<small>iCloud Drive 守护进程 · 只读监控</small></div>
+      <div class="brand">BiRD Monitor <span id="hostName" class="pill" style="font-size:12px;vertical-align:2px">—</span><small>iCloud Drive 守护进程 · 只读监控</small></div>
       <span class="pill" id="healthPill"><span class="dot"></span><span>连接中…</span></span>
       <div class="spacer"></div>
       <span class="chip" id="updated">—</span>
@@ -323,7 +323,7 @@ details summary { cursor: pointer; }
       <div class="card"><h3>监控器自身状态</h3><div id="selfErr"></div></div>
     </div>
   </section>
-  <div class="foot">本页只连本机 127.0.0.1；所有数据只在内存里，不落盘。名称里的 <code>{n}</code> 是 macOS 自带的隐私脱敏（保留首尾字符，中间 n 个字符隐藏）。</div>
+  <div class="foot">本页只连本机 127.0.0.1；所有数据只在内存里，不落盘。名称里的 <code>{n}</code> 是 macOS 26 起自带的隐私脱敏（保留首尾字符，中间 n 个字符隐藏）；macOS 15 及更早的 dump 输出明文名称。</div>
 </main>
 <div class="tip" id="tip"></div>
 
@@ -519,6 +519,7 @@ function render() {
   const s = ST, sm = s.summary || {}, bird = (s.procs || {}).bird || {}, ls = s.logstats || {};
   $("#healthPill").innerHTML = `<span class="dot lv-${s.health}"></span><span>${lvName[s.health]}</span>`;
   $("#updated").textContent = "更新于 " + tstr(s.now);
+  if (s.host) { $("#hostName").textContent = `${s.host} · macOS ${s.os_version || ""}`; document.title = `BiRD · ${s.host}`; }
   const full = s.full_running;
   $("#btnFull").disabled = !!full; $("#btnFull").textContent = full ? "完整 dump 进行中…" : "重新完整 dump";
   // hero
