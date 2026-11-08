@@ -211,6 +211,9 @@ details summary { cursor: pointer; }
       <div class="card"><h3>SyncHealthReport</h3><div class="desc">bird 自己汇报的同步健康状况</div><div id="healthReport"></div></div>
       <div class="card"><h3>近 10 分钟日志级别</h3><div class="desc">bird 进程的全部日志事件</div><div id="lv10"></div></div>
     </div>
+    <div class="card" style="margin-bottom:14px"><h3>上传批次时间线（近 24 小时）</h3>
+      <div class="desc">bird 把待传文件打成一批一起上传；整批失败会从零重传。每隔一两个小时失败一次、批次文件数不减少，说明大文件卡在循环里</div>
+      <div id="upTimeline"></div></div>
     <div class="card">
       <div class="head"><h3>错误 / 警告模式</h3><div class="spacer"></div><span class="desc" style="margin:0">同类消息合并（数字、地址、UUID 已归一化），按最后出现时间排序；点开看原文</span></div>
       <div id="patterns" class="scroll" style="max-height:620px"></div>
@@ -618,6 +621,13 @@ function renderErrors() {
   const parts = [["fault", "故障", "--critical"], ["error", "错误", "--serious"], ["warning", "警告", "--warning"], ["default", "默认", "--s1"], ["info", "信息", "--neutral-fill"]]
     .map(([k, n, c]) => ({ label: n, value: l[k] || 0, color: c }));
   $("#lv10").innerHTML = stackBar(parts) + `<div class="desc" style="margin-top:8px">共 ${fmtNum(parts.reduce((a, p) => a + p.value, 0))} 条；最后一条日志 ${ago(ls.last_event, s.now)}</div>`;
+  const ev = (s.upload_events || []).slice().reverse();
+  const fails = ev.filter(e => e.kind === "fail");
+  $("#upTimeline").innerHTML = ev.length ? `<div class="desc" style="margin:0 0 6px">失败 ${fails.length} 次${fails.length ? `，最近一次 ${ago(fails[0].t, s.now)}` : ""}</div>` + table([
+    { h: "时间", f: e => dstr(e.t), num: true }, { h: "", f: e => ago(e.t, s.now), num: true },
+    { h: "事件", html: true, f: e => e.kind === "fail" ? '<span class="lvl error">整批失败</span>' : '<span class="lvl info">开始上传</span>' },
+    { h: "文件数", f: e => e.n, num: true },
+  ], ev.slice(0, 60)) : '<div class="empty">近 24 小时没有上传批次记录</div>';
   const pats = ls.patterns || [];
   $("#patterns").innerHTML = pats.length ? `<table><thead><tr><th>级别</th><th class="num">次数</th><th>最后</th><th>首次</th><th>分类</th><th>消息模式</th></tr></thead><tbody>${pats.map(p => `
     <tr><td><span class="lvl ${p.level}">${{ fault: "故障", error: "错误", warning: "警告" }[p.level]}</span></td><td class="num">${fmtNum(p.count)}</td>
@@ -670,7 +680,7 @@ function renderSafety() {
   ];
   $("#principles").innerHTML = P.map(([t, m]) => `<div class="check"><div class="ico ok">✓</div><div><div class="t">${esc(t)}</div><div class="m">${esc(m)}</div></div></div>`).join("");
   $("#cmds").innerHTML = table([{ h: "命令", f: r => r.cmd, mono: true }, { h: "次数", f: r => fmtNum(r.n), num: true }], s.commands || []);
-  const nm = { proc: "进程计数器", net: "网络 nettop", files: "数据库文件 stat", lsof: "打开的文件 lsof", status: "brctl status", summary: "brctl dump -i", quota: "brctl quota/accounts", full: "完整 brctl dump" };
+  const nm = { uploadfail: "上传失败回看（log show 24h）", proc: "进程计数器", net: "网络 nettop", files: "数据库文件 stat", lsof: "打开的文件 lsof", status: "brctl status", summary: "brctl dump -i", quota: "brctl quota/accounts", full: "完整 brctl dump" };
   $("#intervals").innerHTML = kv(Object.fromEntries(Object.entries(s.intervals || {}).map(([k, v]) => [nm[k] || k, v >= 60 ? v / 60 + " 分钟" : v + " 秒"])));
   const errs = s.errors || {};
   $("#selfErr").innerHTML = Object.keys(errs).length ? Object.entries(errs).map(([k, v]) => `<div class="check"><div class="ico warn">!</div><div><div class="t">${esc(k)}</div><pre class="raw" style="max-height:140px">${esc(v.msg)}</pre></div></div>`).join("")

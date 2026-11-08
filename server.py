@@ -47,7 +47,7 @@ OS_VERSION = subprocess.run(["sw_vers", "-productVersion"], capture_output=True)
 
 INTERVAL = {
     "proc": 2, "net": 5, "files": 5, "lsof": 15, "status": 60,
-    "summary": 60, "quota": 1800, "full": 3600,
+    "summary": 60, "quota": 1800, "full": 3600, "uploadfail": 600,
 }
 ANSI = re.compile(r"\x1b\[[0-9;]*m")
 TRACKED = ["bird", "cloudd", "nsurlsessiond", "fileproviderd"]
@@ -1029,6 +1029,29 @@ def parse_ndjson_lines(stream):
 PRED = 'process == "bird"'
 
 
+UPFAIL_RX = re.compile(r"^(\d{4}-\d\d-\d\d \d\d:\d\d:\d\d).*?(failed uploading (\d+) items|\] uploading (\d+) documents)")
+
+
+def upload_fail_loop():
+    """bird 上传整批失败后会从零重来；大文件可能因此永远传不完。日志流只看 60 分钟不够，单独回看 24 小时。"""
+    while True:
+        out, _, _ = run(["/usr/bin/log", "show", "--last", "24h", "--style", "compact", "--predicate",
+                         'process == "bird" AND (eventMessage CONTAINS "failed uploading" OR eventMessage CONTAINS "] uploading ")'],
+                        timeout=180)
+        events = []
+        for line in out.splitlines():
+            m = UPFAIL_RX.match(line)
+            if not m:
+                continue
+            t = parse_local(m.group(1))
+            if m.group(3):
+                events.append({"t": t, "kind": "fail", "n": int(m.group(3))})
+            elif m.group(4):
+                events.append({"t": t, "kind": "start", "n": int(m.group(4))})
+        S.set("upload_events", events[-300:])
+        time.sleep(INTERVAL["uploadfail"])
+
+
 def log_backfill():
     out, _, _ = run(["/usr/bin/log", "show", "--last", "60m", "--info", "--style", "ndjson",
                      "--predicate", PRED], timeout=120)
@@ -1172,6 +1195,16 @@ def assess(state, ls):
         add("ok", "待上传队列", f"{up} 个条目排队待上传（完整 dump 完成后会细分）")
     else:
         add("ok", "待上传队列", "空")
+    evs = state.get("upload_events") or []
+    fails6 = [e for e in evs if e["kind"] == "fail" and now - e["t"] < 6 * 3600]
+    fails24 = [e for e in evs if e["kind"] == "fail"]
+    if len(fails6) >= 2:
+        sizes = [e["n"] for e in fails6]
+        add("crit" if len(fails6) >= 4 else "warn", "上传反复失败",
+            f"近 6 小时整批上传失败 {len(fails6)} 次（24 小时 {len(fails24)} 次），每批 {min(sizes)}–{max(sizes)} 个文件；"
+            "bird 失败后从零重传，大文件可能永远传不完——看「错误」页的失败时间线")
+    elif fails24:
+        add("ok", "上传失败", f"24 小时内整批上传失败 {len(fails24)} 次，近 6 小时没有")
     e10 = ls.get("errors10m", 0)
     add("ok" if e10 < 20 else ("warn" if e10 < 200 else "crit"), "近 10 分钟错误日志", f"{e10} 条")
     cpu = bird.get("cpu", 0)
@@ -1330,7 +1363,7 @@ class H(BaseHTTPRequestHandler):
 
 def main():
     for fn in (proc_loop, net_loop, files_loop, lsof_loop, status_loop, quota_loop,
-               summary_loop, full_loop, log_stream_loop):
+               summary_loop, full_loop, log_stream_loop, upload_fail_loop):
         threading.Thread(target=fn, daemon=True, name=fn.__name__).start()
 
     def bye(*_):
