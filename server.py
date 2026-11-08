@@ -1198,11 +1198,16 @@ def assess(state, ls):
     evs = state.get("upload_events") or []
     fails6 = [e for e in evs if e["kind"] == "fail" and now - e["t"] < 6 * 3600]
     fails24 = [e for e in evs if e["kind"] == "fail"]
-    if len(fails6) >= 2:
-        sizes = [e["n"] for e in fails6]
+    # 卡住 = 最近几次失败的批次文件数不减少（同一批大文件反复从零重传）；批次在缩小或单个文件偶发失败后重试成功，不算
+    recent = fails6[-3:]
+    stuck = len(recent) >= 2 and len({e["n"] for e in recent}) == 1 and recent[-1]["n"] >= 2 \
+        and now - recent[-1]["t"] < 3 * 3600
+    if stuck:
         add("crit" if len(fails6) >= 4 else "warn", "上传反复失败",
-            f"近 6 小时整批上传失败 {len(fails6)} 次（24 小时 {len(fails24)} 次），每批 {min(sizes)}–{max(sizes)} 个文件；"
-            "bird 失败后从零重传，大文件可能永远传不完——看「错误」页的失败时间线")
+            f"最近 {len(recent)} 次整批上传失败，每批都是 {recent[-1]['n']} 个文件、没有减少（近 6 小时共 {len(fails6)} 次）；"
+            "bird 失败后整批重来，大文件可能永远传不完——看「错误」页的失败时间线，可用 bin/icloud-serial-upload 逐个上传")
+    elif fails6:
+        add("ok", "上传失败", f"近 6 小时有 {len(fails6)} 次批次失败，但批次在缩小或已重试成功，没有卡住")
     elif fails24:
         add("ok", "上传失败", f"24 小时内整批上传失败 {len(fails24)} 次，近 6 小时没有")
     e10 = ls.get("errors10m", 0)

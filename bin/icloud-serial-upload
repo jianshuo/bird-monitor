@@ -1,0 +1,291 @@
+#!/usr/bin/env python3
+"""iCloud Drive 逐个上传：一次只让 bird 传一个文件，大文件按块切分，保证每块在网络断开之前传完。
+
+背景：bird 把所有待传文件打成一批（一个 CKModifyRecordsOperation）。网络中途断一次，整批失败、
+从零重传。上行慢、连接又每隔一两个小时断一次时，几十 GB 的一批永远传不完。
+
+做法：
+  plan  把待传的大文件从 iCloud Drive 挪到暂存目录（同一磁盘上的改名，不复制），
+        超过 --chunk 的按字节切块（.001 .002 …，cat 即可拼回），SHA-256 校验。原文件保留在暂存目录。
+  run   每分钟看一次：当前这块传完了（不再出现在 brctl status 的待传列表里），就把下一块挪回原目录。
+  status 看进度。
+
+安全：
+  * 只接受「在 iCloud Drive 里、完整在本地、并且 brctl status 显示正等待上传」的文件——
+    服务器上已有的文件挪出 iCloud Drive 等于删除，会同步到其他设备，所以一律拒绝。
+  * 只用 os.rename（同一卷），从不删除任何文件；放回时目标已存在就停下。
+  * 所有动作写日志：~/iCloudSerialUpload/log.txt
+"""
+import argparse
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+HOME = os.path.expanduser("~")
+ICLOUD = os.path.join(HOME, "Library/Mobile Documents/com~apple~CloudDocs")
+ROOT = os.path.join(HOME, "iCloudSerialUpload")
+QUEUE = os.path.join(ROOT, "queue.json")
+LOG = os.path.join(ROOT, "log.txt")
+SF_DATALESS = 0x40000000
+BLOCK = 8 * 1024 * 1024
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def log(msg):
+    os.makedirs(ROOT, exist_ok=True)
+    line = time.strftime("%Y-%m-%d %H:%M:%S ") + msg
+    print(line, flush=True)
+    with open(LOG, "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+
+def human(n):
+    for u in ("B", "KB", "MB", "GB"):
+        if n < 1000 or u == "GB":
+            return f"{n:.0f} {u}" if u == "B" else f"{n:.2f} {u}"
+        n /= 1000
+
+
+def parse_size(s):
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)\s*([KMG]?)B?", s.strip().upper())
+    if not m:
+        raise SystemExit(f"看不懂的大小：{s}")
+    return int(float(m.group(1)) * {"": 1, "K": 1e3, "M": 1e6, "G": 1e9}[m.group(2)])
+
+
+def load():
+    if not os.path.exists(QUEUE):
+        return []
+    with open(QUEUE, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def save(q):
+    tmp = QUEUE + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(q, f, ensure_ascii=False, indent=1)
+    os.replace(tmp, QUEUE)
+
+
+# ---------------------------------------------------------------- 判断「还在等待上传」
+def redaction_regex(red):
+    out = ""
+    for tok in re.split(r"(\{\d+\})", red):
+        if not tok:
+            continue
+        m = re.fullmatch(r"\{(\d+)\}", tok)
+        out += f".{{{m.group(1)}}}" if m else re.escape(tok)
+    return re.compile("^" + out + "$", re.S)
+
+
+def pending_entries():
+    """brctl status 里尚未传完的文档：[(名称(可能脱敏), 字节数, 上传状态)]"""
+    out = subprocess.run(["brctl", "status", "com.apple.CloudDocs"], capture_output=True, timeout=120).stdout
+    out = ANSI.sub("", out.decode("utf-8", "replace"))
+    res = []
+    for line in out.splitlines():
+        m = re.search(r'\bup:([a-z-]+).*?ct\{.*?sz:[^()]*\((\d+)\) n:"([^"]*)"', line)
+        if m:
+            res.append((m.group(3), int(m.group(2)), m.group(1)))
+    return res
+
+
+def is_pending(name, size, entries=None):
+    import unicodedata
+    entries = pending_entries() if entries is None else entries
+    forms = {name, unicodedata.normalize("NFC", name), unicodedata.normalize("NFD", name)}
+    for n, sz, up in entries:
+        if sz != size or up == "idle":
+            continue
+        if "{" in n:
+            rx = redaction_regex(n)
+            if any(rx.match(f) for f in forms):
+                return True
+        elif n in forms:
+            return True
+    return False
+
+
+# ---------------------------------------------------------------- plan
+def split_file(src, parts_dir, name, chunk):
+    os.makedirs(parts_dir, exist_ok=True)
+    h = hashlib.sha256()
+    parts, idx = [], 0
+    with open(src, "rb") as f:
+        while True:
+            idx += 1
+            pname = f"{name}.{idx:03d}"
+            ppath = os.path.join(parts_dir, pname)
+            written = 0
+            with open(ppath, "wb") as out:
+                while written < chunk:
+                    buf = f.read(min(BLOCK, chunk - written))
+                    if not buf:
+                        break
+                    out.write(buf)
+                    h.update(buf)
+                    written += len(buf)
+            if written == 0:
+                os.remove(ppath)   # 恰好整除时多出的空块（这是我们刚建的空文件）
+                break
+            parts.append((pname, ppath, written))
+            if written < chunk:
+                break
+    digest = h.hexdigest()
+    # 回读所有分块再算一遍，确认拼起来与原文件一致
+    h2 = hashlib.sha256()
+    for _, ppath, _ in parts:
+        with open(ppath, "rb") as f:
+            for buf in iter(lambda: f.read(BLOCK), b""):
+                h2.update(buf)
+    if h2.hexdigest() != digest:
+        raise SystemExit(f"校验失败：{name} 的分块拼接后 SHA-256 与原文件不一致，已中止（原文件未动）")
+    return parts, digest
+
+
+def cmd_plan(args):
+    chunk = parse_size(args.chunk)
+    q = load()
+    if any(e["state"] in ("queued", "uploading") for e in q):
+        raise SystemExit("已有未完成的队列，先 status 看看；全部完成后再 plan 新文件")
+    entries = pending_entries()
+    items = []
+    for p in args.files:
+        p = os.path.abspath(os.path.expanduser(p))
+        if not p.startswith(ICLOUD + "/"):
+            raise SystemExit(f"不在 iCloud Drive 里：{p}")
+        st = os.lstat(p)
+        if not os.path.isfile(p) or os.path.islink(p):
+            raise SystemExit(f"不是普通文件：{p}")
+        if st.st_flags & SF_DATALESS:
+            raise SystemExit(f"文件内容不在本地（云端占位）：{p}")
+        if not is_pending(os.path.basename(p), st.st_size, entries):
+            raise SystemExit(f"brctl status 里看不到它在等待上传——可能已在服务器上，挪出会被当成删除，拒绝：{p}")
+        if os.lstat(ROOT if os.path.exists(ROOT) else HOME).st_dev != st.st_dev:
+            raise SystemExit("暂存目录与 iCloud Drive 不在同一磁盘卷上，无法用改名的方式挪动")
+        items.append((p, st.st_size))
+    need = sum(sz for _, sz in items if sz > chunk)
+    free = os.statvfs(HOME).f_bavail * os.statvfs(HOME).f_frsize
+    if need > free - 10e9:
+        raise SystemExit(f"切块需要额外 {human(need)}，磁盘只剩 {human(free)}（保留 10 GB 余量），中止")
+    if args.dry_run:
+        print(f"检查通过：{len(items)} 个文件都在等待上传；切块需额外 {human(need)}，磁盘剩 {human(free)}")
+        for p, sz in sorted(items, key=lambda x: x[1]):
+            n = -(-sz // chunk)
+            print(f"  {human(sz):>10}  {'原样上传' if sz <= chunk else f'切成 {n} 块'}  {os.path.relpath(p, ICLOUD)}")
+        return
+    os.makedirs(ROOT, exist_ok=True)
+    log(f"plan：{len(items)} 个文件，块大小 {human(chunk)}")
+    for p, sz in sorted(items, key=lambda x: x[1]):
+        rel = os.path.relpath(p, ICLOUD)
+        name = os.path.basename(p)
+        stash = os.path.join(ROOT, "originals", rel)
+        os.makedirs(os.path.dirname(stash), exist_ok=True)
+        if os.path.exists(stash):
+            raise SystemExit(f"暂存位置已有同名文件：{stash}")
+        os.rename(p, stash)
+        log(f"挪出 iCloud：{rel}（{human(sz)}）→ {stash}")
+        if sz <= chunk:
+            q.append({"name": name, "src": stash, "dest": p, "size": sz, "state": "queued", "of": rel})
+            continue
+        parts, digest = split_file(stash, os.path.join(ROOT, "parts", os.path.dirname(rel)), name, chunk)
+        log(f"切块：{name} → {len(parts)} 块，SHA-256 {digest}（校验通过；原文件保留在 {stash}）")
+        note = os.path.join(ROOT, "parts", os.path.dirname(rel), f"{name}.合并说明.txt")
+        with open(note, "w", encoding="utf-8") as f:
+            f.write(f"{name} 被切成 {len(parts)} 块上传（每块不超过 {human(chunk)}），以免 iCloud 大文件上传反复失败。\n\n"
+                    f"在终端进入此文件夹后执行：\n  cat \"{name}\".0* > \"{name}\"\n"
+                    f"然后校验（应输出下面这串）：\n  shasum -a 256 \"{name}\"\n  {digest}\n\n"
+                    f"也可以用 Keka / 7-Zip 直接打开 {name}.001。\n")
+        nsz = os.path.getsize(note)
+        q.append({"name": os.path.basename(note), "src": note, "dest": os.path.join(os.path.dirname(p), os.path.basename(note)),
+                  "size": nsz, "state": "queued", "of": rel})
+        for pname, ppath, psz in parts:
+            q.append({"name": pname, "src": ppath, "dest": os.path.join(os.path.dirname(p), pname),
+                      "size": psz, "state": "queued", "of": rel})
+    save(q)
+    log(f"队列就绪：{sum(e['state'] == 'queued' for e in q)} 个待放回")
+
+
+# ---------------------------------------------------------------- run
+def cmd_run(args):
+    log(f"run：开始（每 {args.interval} 秒检查一次）")
+    while True:
+        q = load()
+        cur = next((e for e in q if e["state"] == "uploading"), None)
+        now = time.time()
+        if cur:
+            pend = is_pending(cur["name"], cur["size"])
+            el = now - cur["t0"]
+            if pend:
+                cur["seen"] = True
+                if el > args.warn * 60 and not cur.get("warned"):
+                    cur["warned"] = True
+                    log(f"警告：{cur['name']} 已传 {el / 60:.0f} 分钟仍未完成，块可能偏大")
+            elif cur.get("seen") or el > 300:
+                if not os.path.exists(cur["dest"]):
+                    log(f"异常：{cur['dest']} 不见了，停止（请人工检查）")
+                    save(q)
+                    return 1
+                cur["state"], cur["t1"] = "done", now
+                log(f"完成：{cur['name']}（{human(cur['size'])}），用时 {el / 60:.1f} 分钟，约 {cur['size'] / max(el, 1) / 1e6:.2f} MB/s")
+                cur = None
+        if not cur:
+            nxt = next((e for e in q if e["state"] == "queued"), None)
+            if not nxt:
+                if all(e["state"] == "done" for e in q):
+                    log("全部完成 ✅")
+                save(q)
+                return 0
+            if os.path.exists(nxt["dest"]):
+                log(f"目标已存在，不覆盖，停止：{nxt['dest']}")
+                save(q)
+                return 1
+            os.rename(nxt["src"], nxt["dest"])
+            nxt["state"], nxt["t0"] = "uploading", time.time()
+            left = sum(e["state"] == "queued" for e in q)
+            log(f"放回 iCloud 开始上传：{nxt['name']}（{human(nxt['size'])}），之后还剩 {left} 个")
+        save(q)
+        time.sleep(args.interval)
+
+
+def cmd_status(_):
+    q = load()
+    if not q:
+        print("没有队列")
+        return
+    done = [e for e in q if e["state"] == "done"]
+    cur = [e for e in q if e["state"] == "uploading"]
+    left = [e for e in q if e["state"] == "queued"]
+    tot = sum(e["size"] for e in q)
+    print(f"完成 {len(done)}/{len(q)} 个，{human(sum(e['size'] for e in done))} / {human(tot)}")
+    for e in cur:
+        print(f"正在传：{e['name']}（{human(e['size'])}），已 {(time.time() - e['t0']) / 60:.0f} 分钟")
+    if left:
+        print(f"排队：{len(left)} 个，{human(sum(e['size'] for e in left))}")
+    rates = [e["size"] / (e["t1"] - e["t0"]) for e in done if e.get("t1") and e["size"] > 50e6]
+    if rates:
+        r = sum(rates) / len(rates)
+        print(f"平均 {r / 1e6:.2f} MB/s，剩余约 {sum(e['size'] for e in left + cur) / r / 3600:.1f} 小时")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    p = sub.add_parser("plan")
+    p.add_argument("files", nargs="+")
+    p.add_argument("--chunk", default="800M", help="每块最大字节数，默认 800M")
+    p.add_argument("--dry-run", action="store_true", help="只检查、打印计划，不挪动任何文件")
+    r = sub.add_parser("run")
+    r.add_argument("--interval", type=int, default=60)
+    r.add_argument("--warn", type=int, default=50, help="单块超过多少分钟未完成就记一条警告")
+    sub.add_parser("status")
+    a = ap.parse_args()
+    sys.exit({"plan": cmd_plan, "run": cmd_run, "status": cmd_status}[a.cmd](a) or 0)
+
+
+if __name__ == "__main__":
+    main()

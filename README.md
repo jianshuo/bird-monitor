@@ -52,6 +52,23 @@ bird-monitor pro stop     # 关隧道并停掉远程服务
 5. **不打扰 bird**：brctl 调用串行执行；概要 60 秒一次（约 1 秒）；完整 dump 60 分钟一次（bird 满载约 20 秒，图上用黄色阴影标出），可手动触发；`brctl quota` 会让 bird 向 iCloud 发一次配额请求，所以 30 分钟才查一次，并在操作列表里标为「本监控器触发」。
 6. **不外传**：只监听 127.0.0.1，数据只在内存，push token / change token / record name 在展示前隐藏。
 
+## 大文件逐个上传（bin/icloud-serial-upload）
+
+bird 把所有待传文件打成一批上传，网络断一次整批失败重来。上行慢、连接又时常断开时，几十 GB 的一批可能永远传不完
+（监控器会报「上传反复失败」）。这个工具让 bird 一次只传一个，大文件切成一小时内传得完的块：
+
+```bash
+icloud-serial-upload plan --dry-run --chunk 800M <iCloud Drive 里的待传文件…>   # 先检查、看计划
+icloud-serial-upload plan --chunk 800M <文件…>   # 挪到 ~/iCloudSerialUpload，超过块大小的按字节切块并 SHA-256 校验
+nohup icloud-serial-upload run &                 # 传完一个（不再出现在 brctl status 的待传列表）就放回下一个
+icloud-serial-upload status                      # 进度、实测速度、预计剩余时间
+```
+
+- 只接受「完整在本地、且 brctl status 显示正等待上传」的文件：服务器上已有的文件挪出 iCloud Drive 等于删除，一律拒绝
+- 只用同卷改名，从不删除；原文件保留在 `~/iCloudSerialUpload/originals/`
+- 分块名 `xxx.zip.001 …`，旁边附「合并说明」（`cat xxx.zip.0* > xxx.zip` 及原文件 SHA-256），Keka / 7-Zip 可直接打开 `.001`
+- 块大小按实测最慢速度留余量：一次只传一个文件时 iCloud 并行度低，实测约 0.36 MB/s，800 MB ≈ 37 分钟
+
 ## 名称还原
 
 macOS 26 起 `brctl dump` 会把名称脱敏成 `D{7}s` 这样（保留首尾字符，中间 n 个字符隐藏），本身不可逆。
