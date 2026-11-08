@@ -1,7 +1,13 @@
 #!/bin/bash
 # BiRD Monitor 命令行：start | stop | restart | status | open（默认 open：没在跑就先启动）
 set -u
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# 解析软链接（~/.local/bin/bird-monitor -> 仓库里的 bin/bird-monitor），找到 server.py 所在目录
+SRC="${BASH_SOURCE[0]}"
+while [ -L "${SRC}" ]; do
+  DIR="$(cd "$(dirname "${SRC}")" && pwd)"; SRC="$(readlink "${SRC}")"
+  case "${SRC}" in /*) ;; *) SRC="${DIR}/${SRC}" ;; esac
+done
+HERE="$(cd "$(dirname "${SRC}")/.." && pwd)"
 PORT="${BIRD_MONITOR_PORT:-8790}"
 LOG="$HOME/Library/Logs/BirdMonitor.log"
 URL="http://127.0.0.1:${PORT}/"

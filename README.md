@@ -1,16 +1,15 @@
 # BiRD Monitor
 
-macOS 上 iCloud Drive 同步守护进程 **bird** 的只读状态监控器：本地网页仪表盘 + 可双击的 Mac App。
+macOS 上 iCloud Drive 同步守护进程 **bird** 的只读状态监控器：一条命令启动的本地网页仪表盘。
 
 ## 用法
 
 ```bash
-./make_app.sh                 # 生成 ~/Applications/BirdMonitor.app（自包含，双击即用）
-open ~/Applications/BirdMonitor.app
+ln -s ~/code/bird-monitor/bin/bird-monitor ~/.local/bin/bird-monitor   # 装一次
 
-# 或者直接用命令行
-bin/bird-monitor open         # 没在跑就后台启动，并打开 http://127.0.0.1:8790/
-bin/bird-monitor status | stop | restart
+bird-monitor            # 没在跑就后台启动，并打开 http://127.0.0.1:8790/
+bird-monitor status     # 看是否在运行
+bird-monitor stop | restart
 ```
 
 - 端口默认 8790，可用 `BIRD_MONITOR_PORT=xxxx` 修改
