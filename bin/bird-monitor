@@ -1,0 +1,38 @@
+#!/bin/bash
+# BiRD Monitor 命令行：start | stop | restart | status | open（默认 open：没在跑就先启动）
+set -u
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PORT="${BIRD_MONITOR_PORT:-8790}"
+LOG="$HOME/Library/Logs/BirdMonitor.log"
+URL="http://127.0.0.1:${PORT}/"
+export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+PY="$(command -v python3)"
+
+pid_of() { lsof -tnP -iTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null | head -1; }
+
+is_ours() {
+  local pid; pid="$(pid_of)"
+  [ -n "${pid}" ] && ps -p "${pid}" -o command= | grep -q 'server.py'
+}
+
+start() {
+  if is_ours; then echo "已在运行：${URL}（PID $(pid_of)）"; return 0; fi
+  if [ -n "$(pid_of)" ]; then echo "端口 ${PORT} 被其他程序占用，可用 BIRD_MONITOR_PORT=xxxx 换端口" >&2; return 1; fi
+  mkdir -p "$(dirname "${LOG}")"
+  BIRD_MONITOR_PORT="${PORT}" nohup "${PY}" -I "${HERE}/server.py" >>"${LOG}" 2>&1 &
+  for _ in $(seq 1 100); do is_ours && { echo "已启动：${URL}"; return 0; }; /bin/sleep 0.1; done
+  echo "启动失败，看日志：${LOG}" >&2; return 1
+}
+
+stop() {
+  if is_ours; then kill -TERM "$(pid_of)"; echo "已停止"; else echo "没有在运行"; fi
+}
+
+case "${1:-open}" in
+  start) start ;;
+  stop) stop ;;
+  restart) stop; /bin/sleep 1; start ;;
+  status) if is_ours; then echo "运行中：${URL}（PID $(pid_of)）"; else echo "未运行"; fi ;;
+  open) start && open "${URL}" ;;
+  *) echo "用法：bird-monitor [start|stop|restart|status|open]"; exit 2 ;;
+esac

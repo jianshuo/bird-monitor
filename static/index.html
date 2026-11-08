@@ -1,0 +1,808 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BiRD Monitor</title>
+<style>
+:root {
+  color-scheme: light;
+  --page: #f9f9f7; --surface: #fcfcfb; --surface-2: #f3f2ee; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+  --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11,11,11,0.10);
+  --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b; --good-text: #006300;
+  --neutral-fill: #c3c2b7; --accent-wash: #eaf2fc;
+  --mono: ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+    --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+    --good-text: #0ca30c; --neutral-fill: #4a4a46; --accent-wash: #16263a;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #0d0d0d; --surface: #1a1a19; --surface-2: #232321; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #898781;
+  --grid: #2c2c2a; --axis: #383835; --border: rgba(255,255,255,0.10);
+  --s1: #3987e5; --s2: #d95926; --s3: #199e70; --s4: #c98500; --s5: #d55181; --s6: #008300; --s7: #9085e9; --s8: #e66767;
+  --good-text: #0ca30c; --neutral-fill: #4a4a46; --accent-wash: #16263a;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "PingFang SC", sans-serif; }
+a { color: var(--s1); }
+header.top { position: sticky; top: 0; z-index: 20; background: var(--page); border-bottom: 1px solid var(--border); }
+.wrap { max-width: 1320px; margin: 0 auto; padding: 0 20px; }
+.bar { display: flex; align-items: center; gap: 14px; padding: 12px 0 8px; flex-wrap: wrap; }
+.brand { font-weight: 700; font-size: 17px; letter-spacing: .2px; }
+.brand small { font-weight: 400; color: var(--muted); margin-left: 8px; font-size: 12px; }
+.spacer { flex: 1; }
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; border: 1px solid var(--border); background: var(--surface); }
+.dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
+.lv-ok { background: var(--good); } .lv-warn { background: var(--warning); } .lv-crit { background: var(--critical); }
+button { font: inherit; font-size: 12px; padding: 5px 11px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); cursor: pointer; }
+button:hover { background: var(--surface-2); }
+button:disabled { opacity: .55; cursor: default; }
+nav.tabs { display: flex; gap: 2px; overflow-x: auto; scrollbar-width: none; }
+nav.tabs a { padding: 8px 12px; color: var(--ink-2); text-decoration: none; border-bottom: 2px solid transparent; white-space: nowrap; font-size: 13px; }
+nav.tabs a.on { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+nav.tabs a .badge { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 9px; font-size: 11px; line-height: 17px; text-align: center; background: var(--surface-2); color: var(--ink-2); font-weight: 600; }
+nav.tabs a .badge.hot { background: var(--critical); color: #fff; }
+main { padding: 18px 0 60px; }
+.hero { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; display: flex; gap: 16px; align-items: flex-start; margin-bottom: 14px; }
+.hero .pulse { width: 14px; height: 14px; border-radius: 50%; margin-top: 6px; flex: none; background: var(--neutral-fill); }
+.hero .pulse.busy { background: var(--s1); animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--s1) 45%, transparent);} 50% { box-shadow: 0 0 0 8px transparent; } }
+@media (prefers-reduced-motion: reduce) { .hero .pulse.busy { animation: none; } }
+.hero h1 { font-size: 20px; margin: 0 0 4px; font-weight: 650; }
+.hero .sub { color: var(--ink-2); font-size: 13px; }
+.chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.chip { font-size: 12px; padding: 2px 8px; border-radius: 6px; background: var(--surface-2); color: var(--ink-2); border: 1px solid var(--border); }
+.chip.mono { font-family: var(--mono); font-size: 11px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.tile { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; min-height: 78px; }
+.tile .k { font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
+.tile .v { font-size: 22px; font-weight: 650; margin-top: 2px; letter-spacing: -.3px; }
+.tile .s { font-size: 11px; color: var(--muted); }
+.grid { display: grid; gap: 14px; }
+.g2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.g3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+@media (max-width: 900px) { .g2, .g3 { grid-template-columns: 1fr; } }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; min-width: 0; }
+.card h3 { margin: 0 0 2px; font-size: 14px; font-weight: 650; }
+.card .desc { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+.card .head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.card .head .spacer { flex: 1; }
+section.tab { display: none; } section.tab.on { display: block; }
+table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+th { text-align: left; color: var(--muted); font-weight: 500; padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; position: sticky; top: 0; background: var(--surface); }
+td { padding: 5px 8px; border-bottom: 1px solid var(--grid); vertical-align: top; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td.mono { font-family: var(--mono); font-size: 11.5px; word-break: break-all; }
+.scroll { max-height: 440px; overflow: auto; }
+.kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px 14px; font-size: 12.5px; }
+.kv .k { color: var(--ink-2); }
+.kv .v { font-family: var(--mono); font-size: 11.5px; word-break: break-all; }
+.check { display: flex; gap: 10px; padding: 7px 0; border-bottom: 1px solid var(--grid); align-items: flex-start; }
+.check:last-child { border-bottom: 0; }
+.check .ico { width: 18px; height: 18px; border-radius: 50%; flex: none; display: grid; place-items: center; font-size: 11px; font-weight: 700; color: #fff; margin-top: 1px; }
+.check .ico.ok { background: var(--good); } .check .ico.warn { background: var(--warning); color: #0b0b0b; } .check .ico.crit { background: var(--critical); }
+.check .t { font-weight: 600; font-size: 13px; }
+.check .m { color: var(--ink-2); font-size: 12.5px; }
+.legend { display: flex; gap: 12px; flex-wrap: wrap; font-size: 12px; color: var(--ink-2); margin: 2px 0 6px; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+.chart { position: relative; }
+.chart svg { display: block; width: 100%; overflow: visible; }
+.chart .tick { fill: var(--muted); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.tip { position: fixed; pointer-events: none; z-index: 50; background: var(--surface); color: var(--ink); border: 1px solid var(--border); box-shadow: 0 4px 16px rgba(0,0,0,.12); border-radius: 8px; padding: 7px 9px; font-size: 12px; display: none; max-width: 340px; }
+.tip .tt { color: var(--muted); font-size: 11px; margin-bottom: 3px; }
+.tip .row { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.tip .row b { font-variant-numeric: tabular-nums; }
+.hbars { display: flex; flex-direction: column; gap: 4px; }
+.hbar { display: grid; grid-template-columns: minmax(80px, 34%) 1fr max-content; gap: 8px; align-items: center; font-size: 12px; padding: 1px 0; border-radius: 4px; }
+.hbar:hover { background: var(--surface-2); }
+.hbar .lbl { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-2); font-family: var(--mono); font-size: 11.5px; }
+.hbar .track { height: 12px; }
+.hbar .fill { height: 12px; border-radius: 0 4px 4px 0; background: var(--s1); min-width: 2px; }
+.hbar .val { font-variant-numeric: tabular-nums; color: var(--ink); white-space: nowrap; }
+.meter { height: 8px; background: var(--surface-2); border-radius: 4px; overflow: hidden; }
+.meter > div { height: 100%; background: var(--s1); border-radius: 4px; }
+.stack { display: flex; height: 18px; border-radius: 5px; overflow: hidden; gap: 2px; margin: 6px 0; }
+.stack > div { height: 100%; }
+.lvl { white-space: nowrap; display: inline-flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 600; padding: 0 6px; border-radius: 5px; line-height: 18px; }
+.lvl.fault, .lvl.error { background: color-mix(in srgb, var(--critical) 16%, transparent); color: var(--critical); }
+.lvl.warning { background: color-mix(in srgb, var(--warning) 22%, transparent); color: #8a5a00; }
+:root[data-theme="dark"] .lvl.warning { color: var(--warning); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .lvl.warning { color: var(--warning); } }
+.lvl.info, .lvl.default, .lvl.debug { background: var(--surface-2); color: var(--ink-2); }
+pre.raw { background: var(--surface-2); padding: 12px; border-radius: 8px; font: 11.5px/1.45 var(--mono); max-height: 70vh; overflow: auto; white-space: pre-wrap; word-break: break-all; margin: 0; }
+.toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 10px; }
+input[type=search], select { font: inherit; font-size: 12.5px; padding: 5px 9px; border-radius: 7px; border: 1px solid var(--border); background: var(--surface); color: var(--ink); }
+input[type=search] { min-width: 220px; }
+label.cb { font-size: 12px; color: var(--ink-2); display: inline-flex; gap: 4px; align-items: center; }
+.logrow td { font-size: 12px; }
+.logrow td:nth-child(3) { white-space: nowrap; max-width: 230px; overflow: hidden; text-overflow: ellipsis; }
+.logrow td.msg { font-family: var(--mono); font-size: 11.5px; word-break: break-word; white-space: pre-wrap; }
+.empty { color: var(--muted); font-size: 12.5px; padding: 12px 0; }
+.note { font-size: 12.5px; color: var(--ink-2); background: var(--accent-wash); border-radius: 8px; padding: 10px 12px; margin-bottom: 12px; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+.seg button { border: 0; border-radius: 0; }
+.seg button.on { background: var(--ink); color: var(--surface); }
+details summary { cursor: pointer; }
+.flag { font-family: var(--mono); font-size: 10.5px; padding: 0 5px; border-radius: 4px; background: var(--surface-2); color: var(--ink-2); margin: 1px 2px 1px 0; display: inline-block; }
+.flag.b { background: color-mix(in srgb, var(--s1) 14%, transparent); color: var(--s1); }
+.foot { color: var(--muted); font-size: 11.5px; margin-top: 18px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <div class="bar">
+      <div class="brand">BiRD Monitor<small>iCloud Drive 守护进程 · 只读监控</small></div>
+      <span class="pill" id="healthPill"><span class="dot"></span><span>连接中…</span></span>
+      <div class="spacer"></div>
+      <span class="chip" id="updated">—</span>
+      <button id="btnSummary" title="立即重新执行 brctl dump -i（约 1 秒）">刷新概要</button>
+      <button id="btnFull" title="立即重新执行完整 brctl dump（约 20 秒，读取 client.db / server.db 的全部条目）">重新完整 dump</button>
+      <button id="btnTheme" title="切换浅色/深色">◐</button>
+    </div>
+    <nav class="tabs" id="tabs">
+      <a href="#overview" data-tab="overview">总览</a>
+      <a href="#doing" data-tab="doing">正在做什么</a>
+      <a href="#errors" data-tab="errors">错误<span class="badge" id="bErr">0</span></a>
+      <a href="#db" data-tab="db">数据库内容</a>
+      <a href="#queues" data-tab="queues">队列与差异<span class="badge" id="bQ">0</span></a>
+      <a href="#libs" data-tab="libs">App 资料库<span class="badge" id="bLibs">0</span></a>
+      <a href="#system" data-tab="system">进程与系统</a>
+      <a href="#logs" data-tab="logs">实时日志</a>
+      <a href="#raw" data-tab="raw">原始输出</a>
+      <a href="#safety" data-tab="safety">安全说明</a>
+    </nav>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="hero">
+    <div class="pulse" id="pulse"></div>
+    <div style="min-width:0;flex:1">
+      <h1 id="doingHead">正在读取 bird 状态…</h1>
+      <div class="sub" id="doingSub">首次完整 dump 大约需要 20–30 秒</div>
+      <div class="chips" id="doingChips"></div>
+    </div>
+  </div>
+  <div class="tiles" id="tiles"></div>
+
+  <!-- 总览 -->
+  <section class="tab" id="tab-overview">
+    <div class="grid g2">
+      <div class="card"><h3>健康检查</h3><div class="desc">每 2 秒根据进程计数器、brctl dump、日志综合判断</div><div id="checks"></div></div>
+      <div class="grid" style="align-content:start">
+        <div class="card">
+          <h3>CPU 占用</h3><div class="desc">bird 及协作进程，近 15 分钟（proc_pid_rusage 计数器差分）；黄色阴影＝本监控器触发完整 dump 的时段</div>
+          <div id="chCpu" class="chart"></div>
+        </div>
+        <div class="card"><h3>bird 日志事件 / 分钟</h3><div class="desc">近 2 小时，按级别堆叠（log show + log stream）</div><div id="chLog" class="chart"></div></div>
+      </div>
+      <div class="card"><h3>iCloud 网络吞吐</h3><div class="desc">bird 自己不联网，由 cloudd / nsurlsessiond 代为传输（nettop 计数器差分）</div><div id="chNet" class="chart"></div></div>
+      <div class="card"><h3>bird 磁盘读写</h3><div class="desc">bird 进程的磁盘 IO 速率；黄色阴影＝完整 dump 时段</div><div id="chIO" class="chart"></div></div>
+      <div class="card"><h3>WAL 文件大小</h3><div class="desc">client.db-wal / server.db-wal（只 stat，不打开）——持续上涨说明写入未被检查点吸收</div><div id="chWal" class="chart"></div></div>
+    </div>
+  </section>
+
+  <!-- 正在做什么 -->
+  <section class="tab" id="tab-doing">
+    <div class="grid g2">
+      <div class="card"><h3>同步区（Zone）状态</h3><div class="desc">来自 brctl dump -i 的 CloudDocs 主区</div><div id="zone"></div></div>
+      <div class="card"><h3>待处理活动</h3><div class="desc">pending activity：下载 / 上传 / 读取 / 应用 / 同步</div><div id="pending"></div></div>
+      <div class="card"><h3>上传预算</h3><div class="desc">bird 的 sync-up 节流器：每分钟 / 每小时 / 每天已用比例</div><div id="budget"></div></div>
+      <div class="card"><h3>最近的 CloudKit 操作</h3><div class="desc">从 bird 日志中提取的 Starting / Finished operation</div><div id="ops" class="scroll" style="max-height:300px"></div></div>
+      <div class="card"><h3>bird 当前打开的文件</h3><div class="desc">lsof -p（只读列出文件描述符），每 15 秒</div><div id="lsof"></div></div>
+      <div class="card"><h3>日志里最活跃的组件</h3><div class="desc">日志消息中出现的 BRC*/CK* 类名，以及近 10 分钟的子系统分布</div><div id="components"></div></div>
+    </div>
+  </section>
+
+  <!-- 错误 -->
+  <section class="tab" id="tab-errors">
+    <div class="grid g2" style="margin-bottom:14px">
+      <div class="card"><h3>SyncHealthReport</h3><div class="desc">bird 自己汇报的同步健康状况</div><div id="healthReport"></div></div>
+      <div class="card"><h3>近 10 分钟日志级别</h3><div class="desc">bird 进程的全部日志事件</div><div id="lv10"></div></div>
+    </div>
+    <div class="card">
+      <div class="head"><h3>错误 / 警告模式</h3><div class="spacer"></div><span class="desc" style="margin:0">同类消息合并（数字、地址、UUID 已归一化），按最后出现时间排序；点开看原文</span></div>
+      <div id="patterns" class="scroll" style="max-height:620px"></div>
+    </div>
+  </section>
+
+  <!-- 数据库内容 -->
+  <section class="tab" id="tab-db">
+    <div class="note" id="dbNote">client.db / server.db 的内容通过 <code>brctl dump</code> 由正在运行的 bird 自己读取后输出，本工具从不打开数据库文件。</div>
+    <div class="tiles" id="dbTiles"></div>
+    <div class="grid g2">
+      <div class="card"><h3>数据库文件</h3><div class="desc" id="dbDir">只 stat：大小与修改时间</div><div id="dbFiles"></div></div>
+      <div class="card"><h3>条目构成</h3><div class="desc">client.db 与 server.db 的条目类型</div><div id="composition"></div></div>
+      <div class="card">
+        <div class="head"><h3>按资料库（容器）</h3><div class="spacer"></div>
+          <div class="seg" id="contMode"><button data-m="count" class="on">条目数</button><button data-m="bytes">占用</button></div></div>
+        <div class="desc">client.db，前 20 名</div><div id="containers"></div></div>
+      <div class="card">
+        <div class="head"><h3>按扩展名</h3><div class="spacer"></div>
+          <div class="seg" id="extMode"><button data-m="count" class="on">文件数</button><button data-m="bytes">占用</button></div></div>
+        <div class="desc">文件名已由系统脱敏，扩展名保留</div><div id="exts"></div></div>
+      <div class="card"><h3>近 60 天每天修改的文件数</h3><div class="desc">按内容修改时间（ct.mt）</div><div id="chDays" class="chart"></div></div>
+      <div class="card"><h3>文件大小分布</h3><div class="desc">文件数（悬停看总占用）</div><div id="chSize" class="chart"></div></div>
+      <div class="card"><h3>近 36 个月每月修改的文件数</h3><div class="desc">看你的 iCloud Drive 什么时候最活跃</div><div id="chMonths" class="chart"></div></div>
+      <div class="card"><h3>状态分布</h3><div class="desc">client.db 上传状态、作用域、隔离标记；server.db 的 PCS 加密标记；文件来自哪台设备</div><div id="states"></div></div>
+    </div>
+    <div class="grid g2" style="margin-top:14px">
+      <div class="card"><h3>最大的 30 个文件</h3><div class="desc">client.db</div><div id="largest" class="scroll"></div></div>
+      <div class="card"><h3>最近修改的 40 个文件</h3><div class="desc">client.db</div><div id="recent" class="scroll"></div></div>
+      <div class="card"><h3>最近使用的文件</h3><div class="desc">按 lastUsed（lu）</div><div id="recentUsed" class="scroll"></div></div>
+      <div class="card"><h3>废纸篓里的条目</h3><div class="desc">sc:trash</div><div id="trash" class="scroll"></div></div>
+    </div>
+  </section>
+
+  <!-- 队列与差异 -->
+  <section class="tab" id="tab-queues">
+    <div class="grid g2" style="margin-bottom:14px">
+      <div class="card"><h3>client.db 上挂着的任务</h3><div class="desc">每个条目后面的 “&gt; xxx{…}” 子任务</div><div id="qKinds"></div></div>
+      <div class="card"><h3>server.db ⇄ client.db 差异</h3><div class="desc">按条目 ID 逐容器比较（不计本地虚拟根）</div><div id="diffSum"></div></div>
+    </div>
+    <div class="card" style="margin-bottom:14px"><h3>队列明细</h3><div class="desc">sync-up：等待上传元数据或内容；downloader：等待/曾经下载</div><div id="qRows" class="scroll" style="max-height:520px"></div></div>
+    <div class="grid g2">
+      <div class="card"><h3>只在本地（client）存在</h3><div id="onlyClient" class="scroll"></div></div>
+      <div class="card"><h3>只在服务器（server）存在</h3><div id="onlyServer" class="scroll"></div></div>
+    </div>
+  </section>
+
+  <!-- App 资料库 -->
+  <section class="tab" id="tab-libs">
+    <div class="card">
+      <div class="toolbar"><input type="search" id="libQ" placeholder="搜索资料库 / App / 标记"><span class="desc" id="libCount" style="margin:0"></span></div>
+      <div id="libs" class="scroll" style="max-height:72vh"></div>
+    </div>
+  </section>
+
+  <!-- 进程与系统 -->
+  <section class="tab" id="tab-system">
+    <div class="card" style="margin-bottom:14px"><h3>相关进程</h3><div class="desc">bird 是协调者；cloudd 负责 CloudKit 通讯；nsurlsessiond 负责后台传输；fileproviderd 负责 Finder 端文件提供</div><div id="procTable"></div></div>
+    <div class="grid g2">
+      <div class="card"><h3>内存占用（phys_footprint）</h3><div class="desc">近 15 分钟</div><div id="chMem" class="chart"></div></div>
+      <div class="card"><h3>系统状态</h3><div id="sys"></div></div>
+      <div class="card"><h3>调度器</h3><div id="sched"></div></div>
+      <div class="card"><h3>client_state</h3><div class="desc">bird 写在 client.db 里的全局状态</div><div id="clientState"></div></div>
+      <div class="card"><h3>server_state 与数据库元信息</h3><div id="serverState"></div></div>
+      <div class="card"><h3>启动历史</h3><div class="desc">server_truth / client_truth / backup_detector</div><div id="boot"></div></div>
+      <div class="card"><h3>账号与配额</h3><div id="account"></div></div>
+      <div class="card"><h3>XPC 客户端</h3><div class="desc">正在和 bird 通讯的进程（名称已脱敏）</div><div id="xpc"></div></div>
+      <div class="card"><h3>设备</h3><div class="desc">登录过这个 iCloud Drive 的设备（名称已脱敏）</div><div id="devices" class="scroll" style="max-height:320px"></div></div>
+      <div class="card"><h3>CloudDocs 会话目录</h3><div class="desc">~/Library/Application Support/CloudDocs/session（只列目录）</div><div id="session"></div></div>
+    </div>
+  </section>
+
+  <!-- 实时日志 -->
+  <section class="tab" id="tab-logs">
+    <div class="card">
+      <div class="toolbar">
+        <input type="search" id="logQ" placeholder="过滤消息 / 分类">
+        <label class="cb"><input type="checkbox" class="lvf" value="error" checked>错误</label>
+        <label class="cb"><input type="checkbox" class="lvf" value="fault" checked>故障</label>
+        <label class="cb"><input type="checkbox" class="lvf" value="warning" checked>警告</label>
+        <label class="cb"><input type="checkbox" class="lvf" value="default" checked>默认</label>
+        <label class="cb"><input type="checkbox" class="lvf" value="info" checked>信息</label>
+        <button id="logPause">暂停</button>
+        <span class="desc" id="logInfo" style="margin:0"></span>
+      </div>
+      <div class="scroll" style="max-height:72vh" id="logBox"><table><thead><tr><th>时间</th><th>级别</th><th>分类</th><th>消息</th></tr></thead><tbody id="logBody"></tbody></table></div>
+    </div>
+  </section>
+
+  <!-- 原始输出 -->
+  <section class="tab" id="tab-raw">
+    <div class="card">
+      <div class="toolbar">
+        <select id="rawKind"><option value="summary">brctl dump -i（概要）</option><option value="status">brctl status</option></select>
+        <button id="rawLoad">载入</button><span class="desc" style="margin:0">push token、change token、record name 已隐藏</span>
+      </div>
+      <pre class="raw" id="rawBox">（点「载入」）</pre>
+    </div>
+  </section>
+
+  <!-- 安全说明 -->
+  <section class="tab" id="tab-safety">
+    <div class="grid g2">
+      <div class="card">
+        <h3>这个监控器怎么保证安全</h3>
+        <div class="desc">硬约束，写在 server.py 顶部</div>
+        <div id="principles"></div>
+      </div>
+      <div class="card"><h3>实际执行过的命令</h3><div class="desc">本次运行以来所有子进程命令及次数（实时）</div><div id="cmds" class="scroll"></div></div>
+      <div class="card"><h3>采集频率</h3><div id="intervals"></div></div>
+      <div class="card"><h3>监控器自身状态</h3><div id="selfErr"></div></div>
+    </div>
+  </section>
+  <div class="foot">本页只连本机 127.0.0.1；所有数据只在内存里，不落盘。名称里的 <code>{n}</code> 是 macOS 自带的隐私脱敏（保留首尾字符，中间 n 个字符隐藏）。</div>
+</main>
+<div class="tip" id="tip"></div>
+
+<script>
+"use strict";
+const $ = (s, el = document) => el.querySelector(s);
+const $$ = (s, el = document) => [...el.querySelectorAll(s)];
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const SERIES = ["--s1", "--s2", "--s3", "--s4", "--s5", "--s6", "--s7", "--s8"];
+const PROC_COLOR = { bird: "--s1", cloudd: "--s2", nsurlsessiond: "--s3", fileproviderd: "--s7" };
+
+function fmtBytes(b, d = 1) {
+  if (b == null || isNaN(b)) return "—";
+  const u = ["B", "KB", "MB", "GB", "TB"]; let i = 0; b = +b;
+  while (Math.abs(b) >= 1000 && i < u.length - 1) { b /= 1000; i++; }
+  return (i === 0 ? b.toFixed(0) : b.toFixed(b >= 100 ? 0 : d)) + " " + u[i];
+}
+const fmtRate = b => fmtBytes(b) + "/s";
+const fmtNum = n => n == null ? "—" : Number(n).toLocaleString("zh-CN");
+function ago(t, now = Date.now() / 1000) {
+  if (!t) return "—"; const s = Math.max(0, now - t);
+  if (s < 60) return Math.round(s) + " 秒前"; if (s < 3600) return Math.round(s / 60) + " 分钟前";
+  if (s < 86400) return (s / 3600).toFixed(1) + " 小时前"; return Math.round(s / 86400) + " 天前";
+}
+function dur(s) {
+  if (s == null) return "—"; s = Math.round(s);
+  const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60);
+  return d ? `${d} 天 ${h} 小时` : h ? `${h} 小时 ${m} 分` : `${m} 分 ${s % 60} 秒`;
+}
+const tstr = t => { const d = new Date(t * 1000); return d.toLocaleTimeString("zh-CN", { hour12: false }); };
+const dstr = t => t ? new Date(t * 1000).toLocaleString("zh-CN", { hour12: false }) : "—";
+const lvIco = { ok: "✓", warn: "!", crit: "×" };
+const lvName = { ok: "正常", warn: "需留意", crit: "有问题" };
+
+/* ---------------- tooltip ---------------- */
+const tip = $("#tip");
+function showTip(x, y, html) {
+  tip.innerHTML = html; tip.style.display = "block";
+  const r = tip.getBoundingClientRect();
+  let left = x + 14, top = y + 14;
+  if (left + r.width > innerWidth - 8) left = x - r.width - 14;
+  if (top + r.height > innerHeight - 8) top = y - r.height - 14;
+  tip.style.left = left + "px"; tip.style.top = top + "px";
+}
+const hideTip = () => tip.style.display = "none";
+
+/* ---------------- charts ---------------- */
+function niceMax(v) {
+  if (v <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); const n = v / p;
+  return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 2.5 ? 2.5 : n <= 5 ? 5 : 10) * p;
+}
+function lineChart(el, series, opt = {}) {
+  const W = el.clientWidth || 500, H = opt.height || 170, P = { l: 52, r: 10, t: 8, b: 22 };
+  const all = series.flatMap(s => s.points);
+  if (!all.length) { el.innerHTML = '<div class="empty">正在采集…</div>'; return; }
+  const x0 = Math.min(...all.map(p => p[0])), x1 = Math.max(...all.map(p => p[0]), x0 + 1);
+  const ymax = niceMax(Math.max(opt.minMax || 0, ...all.map(p => p[1])));
+  const X = t => P.l + (t - x0) / (x1 - x0) * (W - P.l - P.r), Y = v => H - P.b - v / ymax * (H - P.t - P.b);
+  const fmt = opt.fmt || (v => v);
+  let g = "";
+  for (let i = 0; i <= 4; i++) {
+    const v = ymax * i / 4, y = Y(v);
+    g += `<line x1="${P.l}" x2="${W - P.r}" y1="${y}" y2="${y}" stroke="${i ? css("--grid") : css("--axis")}" stroke-width="1"/>`;
+    g += `<text class="tick" x="${P.l - 6}" y="${y + 3.5}" text-anchor="end">${esc(fmt(v))}</text>`;
+  }
+  for (let i = 0; i <= 3; i++) {
+    const t = x0 + (x1 - x0) * i / 3;
+    g += `<text class="tick" x="${X(t)}" y="${H - 6}" text-anchor="${i === 0 ? "start" : i === 3 ? "end" : "middle"}">${tstr(t).slice(0, 5)}</text>`;
+  }
+  (opt.bands || []).forEach(([a, b]) => {
+    if (b < x0 || a > x1) return;
+    const xa = X(Math.max(a, x0)), xb = X(Math.min(b, x1));
+    g += `<rect x="${xa}" y="${P.t}" width="${Math.max(2, xb - xa)}" height="${H - P.t - P.b}" fill="${css("--s4")}" opacity=".13"/>`;
+    g += `<text class="tick" x="${xa + 3}" y="${P.t + 11}">完整 dump</text>`;
+  });
+  const paths = series.map(s => {
+    if (!s.points.length) return "";
+    const d = s.points.map((p, i) => (i ? "L" : "M") + X(p[0]).toFixed(1) + "," + Y(p[1]).toFixed(1)).join("");
+    const area = opt.area && series.length === 1 ? `<path d="${d}L${X(s.points.at(-1)[0])},${Y(0)}L${X(s.points[0][0])},${Y(0)}Z" fill="${css(s.color)}" opacity=".10"/>` : "";
+    return area + `<path d="${d}" fill="none" stroke="${css(s.color)}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+  }).join("");
+  const legend = series.length > 1 ? `<div class="legend">${series.map(s => `<span><i style="background:${css(s.color)}"></i>${esc(s.name)}</span>`).join("")}</div>` : "";
+  el.innerHTML = legend + `<svg viewBox="0 0 ${W} ${H}" height="${H}" role="img" aria-label="${esc(opt.label || "")}">${g}${paths}<line class="xh" y1="${P.t}" y2="${H - P.b}" stroke="${css("--axis")}" stroke-width="1" style="display:none"/><g class="dots"></g><rect x="${P.l}" y="0" width="${W - P.l - P.r}" height="${H}" fill="transparent"/></svg>`;
+  const svg = $("svg", el), xh = $(".xh", svg), dots = $(".dots", svg);
+  svg.addEventListener("mousemove", ev => {
+    const r = svg.getBoundingClientRect(); const mx = (ev.clientX - r.left) * W / r.width;
+    const t = x0 + (mx - P.l) / (W - P.l - P.r) * (x1 - x0);
+    let rows = "", dd = "";
+    series.forEach(s => {
+      if (!s.points.length) return;
+      let best = s.points[0];
+      for (const p of s.points) if (Math.abs(p[0] - t) < Math.abs(best[0] - t)) best = p;
+      rows += `<div class="row"><span><span class="dot" style="background:${css(s.color)}"></span> ${esc(s.name)}</span><b>${esc(fmt(best[1]))}</b></div>`;
+      dd += `<circle cx="${X(best[0])}" cy="${Y(best[1])}" r="4" fill="${css(s.color)}" stroke="${css("--surface")}" stroke-width="2"/>`;
+    });
+    xh.setAttribute("x1", mx); xh.setAttribute("x2", mx); xh.style.display = ""; dots.innerHTML = dd;
+    showTip(ev.clientX, ev.clientY, `<div class="tt">${tstr(t)}</div>${rows}`);
+  });
+  svg.addEventListener("mouseleave", () => { xh.style.display = "none"; dots.innerHTML = ""; hideTip(); });
+}
+function barChart(el, cats, stacks, opt = {}) {
+  // cats: labels; stacks: [{name,color,values}]
+  const W = el.clientWidth || 500, H = opt.height || 170, P = { l: 44, r: 6, t: 8, b: 22 };
+  if (!cats.length) { el.innerHTML = '<div class="empty">暂无数据</div>'; return; }
+  const totals = cats.map((_, i) => stacks.reduce((a, s) => a + (s.values[i] || 0), 0));
+  const ymax = niceMax(Math.max(...totals, 1));
+  const bw = (W - P.l - P.r) / cats.length, gap = Math.min(2, bw * 0.25), barW = Math.max(1, bw - gap);
+  const Y = v => H - P.b - v / ymax * (H - P.t - P.b);
+  const fmt = opt.fmt || fmtNum;
+  let g = "";
+  for (let i = 0; i <= 4; i++) {
+    const v = ymax * i / 4, y = Y(v);
+    g += `<line x1="${P.l}" x2="${W - P.r}" y1="${y}" y2="${y}" stroke="${i ? css("--grid") : css("--axis")}"/>`;
+    g += `<text class="tick" x="${P.l - 6}" y="${y + 3.5}" text-anchor="end">${esc(fmt(v))}</text>`;
+  }
+  const every = Math.ceil(cats.length / (opt.maxTicks || 6));
+  cats.forEach((c, i) => {
+    if (i % every === 0 || (opt.lastTick && i === cats.length - 1))
+      g += `<text class="tick" x="${P.l + i * bw + bw / 2}" y="${H - 6}" text-anchor="middle">${esc(opt.tickFmt ? opt.tickFmt(c) : c)}</text>`;
+  });
+  let bars = "";
+  cats.forEach((c, i) => {
+    let acc = 0; const segs = stacks.filter(s => s.values[i] > 0);
+    segs.forEach((s, j) => {
+      const v = s.values[i]; const y1 = Y(acc), y2 = Y(acc + v); acc += v;
+      const h = Math.max(0, y1 - y2 - (j < segs.length - 1 ? 2 : 0));
+      const top = j === segs.length - 1;
+      const x = P.l + i * bw + gap / 2, rr = Math.min(4, barW / 2, h);
+      bars += top && h > 0
+        ? `<path d="M${x},${y1}V${y2 + rr}Q${x},${y2} ${x + rr},${y2}H${x + barW - rr}Q${x + barW},${y2} ${x + barW},${y2 + rr}V${y1}Z" fill="${css(s.color)}"/>`
+        : `<rect x="${x}" y="${y1 - h}" width="${barW}" height="${h}" fill="${css(s.color)}"/>`;
+    });
+    bars += `<rect class="hit" data-i="${i}" x="${P.l + i * bw}" y="${P.t}" width="${bw}" height="${H - P.t - P.b}" fill="transparent"/>`;
+  });
+  const legend = stacks.length > 1 ? `<div class="legend">${stacks.map(s => `<span><i style="background:${css(s.color)}"></i>${esc(s.name)}</span>`).join("")}</div>` : "";
+  el.innerHTML = legend + `<svg viewBox="0 0 ${W} ${H}" height="${H}">${g}${bars}</svg>`;
+  $$(".hit", el).forEach(r => {
+    r.addEventListener("mousemove", ev => {
+      const i = +r.dataset.i; r.setAttribute("fill", css("--grid")); r.setAttribute("fill-opacity", ".5");
+      const rows = stacks.map(s => `<div class="row"><span>${stacks.length > 1 ? `<span class="dot" style="background:${css(s.color)}"></span> ` : ""}${esc(s.name)}</span><b>${esc(fmt(s.values[i] || 0))}</b></div>`).join("")
+        + (opt.extra ? opt.extra(i) : "");
+      showTip(ev.clientX, ev.clientY, `<div class="tt">${esc(opt.tipTitle ? opt.tipTitle(cats[i]) : cats[i])}</div>${rows}`);
+    });
+    r.addEventListener("mouseleave", () => { r.setAttribute("fill", "transparent"); hideTip(); });
+  });
+}
+function hbars(el, rows, opt = {}) {
+  // rows: [{label, value, sub, title}]
+  if (!rows.length) { el.innerHTML = '<div class="empty">暂无数据</div>'; return; }
+  const max = Math.max(...rows.map(r => r.value), 1), fmt = opt.fmt || fmtNum;
+  el.innerHTML = `<div class="hbars">${rows.map(r => `<div class="hbar" title="${esc(r.title || r.label)}"><div class="lbl">${esc(r.label)}</div><div class="track"><div class="fill" style="width:${(r.value / max * 100).toFixed(2)}%;background:${css(r.color || opt.color || "--s1")}"></div></div><div class="val">${esc(fmt(r.value))}${r.sub ? ` <span style="color:var(--muted)">${esc(r.sub)}</span>` : ""}</div></div>`).join("")}</div>`;
+}
+function stackBar(parts) {
+  const tot = parts.reduce((a, p) => a + p.value, 0) || 1;
+  return `<div class="stack">${parts.filter(p => p.value > 0).map(p => `<div title="${esc(p.label)}：${fmtNum(p.value)}（${(p.value / tot * 100).toFixed(1)}%）" style="flex:${p.value} 0 0;background:${css(p.color)}"></div>`).join("")}</div>
+  <div class="legend">${parts.map(p => `<span><i style="background:${css(p.color)}"></i>${esc(p.label)} ${fmtNum(p.value)}</span>`).join("")}</div>`;
+}
+const kv = obj => `<div class="kv">${Object.entries(obj || {}).map(([k, v]) => `<div class="k">${esc(k)}</div><div class="v">${esc(typeof v === "object" ? JSON.stringify(v) : v)}</div>`).join("") || '<div class="empty">暂无</div>'}</div>`;
+function table(cols, rows, empty = "暂无") {
+  if (!rows.length) return `<div class="empty">${empty}</div>`;
+  return `<table><thead><tr>${cols.map(c => `<th class="${c.num ? "num" : ""}">${esc(c.h)}</th>`).join("")}</tr></thead><tbody>${rows.map(r => `<tr>${cols.map(c => `<td class="${c.num ? "num" : ""} ${c.mono ? "mono" : ""}">${c.html ? c.f(r) : esc(c.f(r))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
+}
+const fileCols = (extra = []) => [
+  { h: "名称（脱敏）", f: r => r.n || r.id, mono: true },
+  { h: "资料库", f: r => r.cn || "", mono: true },
+  { h: "大小", f: r => fmtBytes(r.sz), num: true },
+  ...extra,
+];
+
+/* ---------------- state ---------------- */
+let ST = null, HI = null, IT = null, itemsVer = -1;
+let contMode = "count", extMode = "count";
+
+async function j(url, opt) { const r = await fetch(url, opt); if (!r.ok) throw new Error(r.status); return r.json(); }
+
+async function tick() {
+  try {
+    ST = await j("/api/state");
+    render();
+    if (ST.items_version !== itemsVer) {
+      const r = await j("/api/items"); IT = r.items; itemsVer = r.version; renderItems();
+    }
+  } catch (e) {
+    $("#healthPill").innerHTML = `<span class="dot lv-crit"></span><span>与监控服务断开</span>`;
+  }
+}
+async function tickHist() {
+  try { HI = await j("/api/history"); renderCharts(); } catch (e) { }
+}
+
+function render() {
+  const s = ST, sm = s.summary || {}, bird = (s.procs || {}).bird || {}, ls = s.logstats || {};
+  $("#healthPill").innerHTML = `<span class="dot lv-${s.health}"></span><span>${lvName[s.health]}</span>`;
+  $("#updated").textContent = "更新于 " + tstr(s.now);
+  const full = s.full_running;
+  $("#btnFull").disabled = !!full; $("#btnFull").textContent = full ? "完整 dump 进行中…" : "重新完整 dump";
+  // hero
+  const d = s.doing || {};
+  $("#pulse").className = "pulse" + (d.busy ? " busy" : "");
+  $("#doingHead").textContent = d.headline || "—";
+  const z = (sm.zone || {}).detail || {};
+  $("#doingSub").textContent = [z.client && `客户端 ${z.client}`, z.sync && `同步 ${z.sync}`, `日志 ${ls.rate60s ?? 0} 条/分钟`,
+    s.full_meta && `完整 dump：${ago(s.full_meta.taken, s.now)}（耗时 ${s.full_meta.took}s）`].filter(Boolean).join(" · ");
+  $("#doingChips").innerHTML = (d.details || []).map(x => `<span class="chip">${esc(x)}</span>`).join("");
+  // tiles
+  const qLive = (s.quota || {}).remaining, q = qLive ?? sm.available_quota;
+  const lsync = z["last-sync"] ? Date.parse(z["last-sync"].replace(" ", "T")) / 1000 : null;
+  const tiles = [
+    ["bird 进程", bird.running ? "运行中" : "未运行", bird.running ? `PID ${bird.pid} · ${dur(bird.uptime)}` : "", bird.running ? "ok" : "crit"],
+    ["CPU", (bird.cpu ?? 0).toFixed(1) + "%", `累计 ${dur(bird.cpu_total_s)} · ${bird.threads ?? "—"} 线程`],
+    ["内存占用", fmtBytes(bird.footprint), `唤醒 ${(bird.wakeups_rate ?? 0).toFixed(0)}/s`],
+    ["磁盘 IO", fmtRate((bird.read_rate || 0) + (bird.write_rate || 0)), `累计读 ${fmtBytes(bird.read)} · 写 ${fmtBytes(bird.write)}`],
+    ["待上传", fmtNum(sm.sync_up_scheduled), "sync-up-scheduled", sm.sync_up_scheduled ? "warn" : "ok"],
+    ["近 10 分钟错误", fmtNum(ls.errors10m), `模式 ${(ls.patterns || []).length} 种`, ls.errors10m > 200 ? "crit" : ls.errors10m >= 20 ? "warn" : "ok"],
+    ["最近同步", lsync ? ago(lsync, s.now) : "—", z["caught-up"] ? "已追平服务器" : (z.sync || ""), lsync && s.now - lsync > 6 * 3600 ? "warn" : "ok"],
+    ["iCloud 剩余", fmtBytes(q), qLive != null ? "brctl quota 实时值" : "缓存值（可能过时），实时值查询中"],
+  ];
+  $("#tiles").innerHTML = tiles.map(([k, v, sub, lv]) => `<div class="tile"><div class="k">${lv ? `<span class="dot lv-${lv}" aria-label="${lvName[lv]}"></span>` : ""}${esc(k)}</div><div class="v">${esc(v)}</div><div class="s">${esc(sub)}</div></div>`).join("");
+  $("#checks").innerHTML = (s.checks || []).map(c => `<div class="check"><div class="ico ${c.level}" aria-label="${lvName[c.level]}">${lvIco[c.level]}</div><div><div class="t">${esc(c.title)} <span class="lvl ${c.level === "ok" ? "info" : c.level === "warn" ? "warning" : "error"}">${lvName[c.level]}</span></div><div class="m">${esc(c.msg)}</div></div></div>`).join("");
+  // badges
+  const be = $("#bErr"); be.textContent = ls.errors10m ?? 0; be.className = "badge" + (ls.errors10m ? " hot" : "");
+  $("#bQ").textContent = sm.sync_up_scheduled ?? 0;
+  $("#bLibs").textContent = (sm.app_libraries || []).length;
+  renderDoing(); renderErrors(); renderSystem(); renderSafety(); renderDbFiles(); renderLibs();
+  renderLogChart();
+}
+
+function renderDoing() {
+  const s = ST, sm = s.summary || {}, ls = s.logstats || {};
+  const z = sm.zone;
+  $("#zone").innerHTML = z ? `<div style="margin-bottom:8px"><span class="flag b">${esc(z.state)}</span> <span class="mono" style="font-family:var(--mono);font-size:12px">${esc(z.name)}[${z.id}]</span></div>` +
+    kv(Object.fromEntries(Object.entries(z.detail).filter(([k]) => k !== "raw" && k !== "token"))) : '<div class="empty">等待 brctl dump -i…</div>';
+  $("#pending").innerHTML = kv(sm.pending);
+  const b = sm.sync_budget, ub = sm.up_budget;
+  const meter = (lbl, x) => x ? `<div style="display:grid;grid-template-columns:70px 1fr 140px;gap:10px;align-items:center;margin:6px 0"><span style="color:var(--ink-2);font-size:12px">${lbl}</span><div class="meter"><div style="width:${Math.max(1, x.used)}%"></div></div><span style="font-size:12px;font-variant-numeric:tabular-nums">${x.used.toFixed(1)}% · 上限 ${x.cap}</span></div>` : "";
+  $("#budget").innerHTML = b ? `<div class="desc" style="margin:0 0 2px">全局 sync-up 预算</div>${meter("每分钟", b.m)}${meter("每小时", b.h)}${meter("每天", b.d)}` +
+    (ub ? `<div class="desc" style="margin:10px 0 2px">本区 up-budget</div>${meter("每分钟", ub.m)}${meter("每小时", ub.h)}${meter("每天", ub.d)}` : "") : '<div class="empty">暂无</div>';
+  const ops = (ls.ops || []).slice().reverse();
+  $("#ops").innerHTML = table([
+    { h: "时间", f: r => r.ts.slice(0, 8) }, { h: "阶段", f: r => r.phase }, { h: "操作", f: r => r.op, mono: true },
+    { h: "说明", html: true, f: r => esc(r.name) + (r.own ? ' <span class="flag b">本监控器触发</span>' : "") },
+  ], ops, "最近 60 分钟没有 CloudKit 操作日志（空闲时正常）");
+  const lf = s.lsof || {};
+  $("#lsof").innerHTML = (lf.kinds ? stackBar(Object.entries(lf.kinds).slice(0, 6).map(([k, v], i) => ({ label: k, value: v, color: SERIES[i] }))) : "") +
+    table([{ h: "fd", f: r => r.fd }, { h: "文件", f: r => r.name, mono: true }], lf.files || [], "除系统库外没有打开普通文件");
+  const comps = (ls.components || []).map(([k, v]) => ({ label: k, value: v }));
+  const el = $("#components"); el.innerHTML = '<div id="compBars"></div><div class="desc" style="margin:12px 0 4px">近 10 分钟子系统/分类</div><div id="catBars"></div>';
+  hbars($("#compBars"), comps.slice(0, 12));
+  hbars($("#catBars"), (ls.categories10m || []).map(([k, v]) => ({ label: k, value: v })), { color: "--s2" });
+}
+
+function renderErrors() {
+  const s = ST, sm = s.summary || {}, ls = s.logstats || {};
+  const hr = sm.health_report || {};
+  $("#healthReport").innerHTML = Object.keys(hr).length ? Object.entries(hr).map(([k, v]) => {
+    const ok = v.trim() === "none";
+    return `<div class="check"><div class="ico ${ok ? "ok" : "crit"}">${ok ? "✓" : "×"}</div><div><div class="t" style="font-family:var(--mono);font-size:12px">${esc(k)}</div><div class="m">${esc(ok ? "无错误" : v)}</div></div></div>`;
+  }).join("") : '<div class="empty">等待 brctl dump -i…</div>';
+  const l = ls.last10m || {};
+  const parts = [["fault", "故障", "--critical"], ["error", "错误", "--serious"], ["warning", "警告", "--warning"], ["default", "默认", "--s1"], ["info", "信息", "--neutral-fill"]]
+    .map(([k, n, c]) => ({ label: n, value: l[k] || 0, color: c }));
+  $("#lv10").innerHTML = stackBar(parts) + `<div class="desc" style="margin-top:8px">共 ${fmtNum(parts.reduce((a, p) => a + p.value, 0))} 条；最后一条日志 ${ago(ls.last_event, s.now)}</div>`;
+  const pats = ls.patterns || [];
+  $("#patterns").innerHTML = pats.length ? `<table><thead><tr><th>级别</th><th class="num">次数</th><th>最后</th><th>首次</th><th>分类</th><th>消息模式</th></tr></thead><tbody>${pats.map(p => `
+    <tr><td><span class="lvl ${p.level}">${{ fault: "故障", error: "错误", warning: "警告" }[p.level]}</span></td><td class="num">${fmtNum(p.count)}</td>
+    <td class="num">${ago(p.last, s.now)}</td><td class="num">${ago(p.first, s.now)}</td><td class="mono">${esc((p.sub ? p.sub + "/" : "") + p.cat)}</td>
+    <td><details><summary class="mono" style="font-family:var(--mono);font-size:11.5px">${esc(p.pattern)}</summary><pre class="raw" style="margin-top:6px;max-height:200px">${esc(p.sample)}</pre></details></td></tr>`).join("")}</tbody></table>`
+    : '<div class="empty">近 60 分钟没有错误或警告 🎉</div>';
+}
+
+function renderSystem() {
+  const s = ST, sm = s.summary || {}, procs = s.procs || {}, net = s.net || {};
+  $("#procTable").innerHTML = table([
+    { h: "进程", html: true, f: r => `<span class="dot" style="background:${css(PROC_COLOR[r.name])}"></span> ${esc(r.name)}` },
+    { h: "状态", f: r => r.running ? "运行" : "未运行" }, { h: "PID", f: r => (r.pids || []).join(", ") },
+    { h: "CPU", f: r => (r.cpu || 0).toFixed(1) + "%", num: true }, { h: "内存", f: r => fmtBytes(r.footprint), num: true },
+    { h: "磁盘读", f: r => fmtRate(r.read_rate), num: true }, { h: "磁盘写", f: r => fmtRate(r.write_rate), num: true },
+    { h: "网络下行", f: r => fmtRate((net[r.name] || {}).in), num: true }, { h: "网络上行", f: r => fmtRate((net[r.name] || {}).out), num: true },
+  ], Object.values(procs));
+  $("#sys").innerHTML = kv(sm.system);
+  $("#sched").innerHTML = kv(sm.scheduler);
+  $("#clientState").innerHTML = kv(sm.client_state);
+  const ss = Object.fromEntries(Object.entries(sm.server_state || {}).filter(([k]) => k !== "raw" && k !== "token"));
+  $("#serverState").innerHTML = kv({ ...ss, "数据库版本": sm.db_version, "数据库 ID": sm.db_id, "文件系统": sm.fs_type, "账号 DSID": sm.account, "bird 启动于": sm.startup_ago ? dur(sm.startup_ago) + "前" : "—", "dump 来源": sm.source, "dump 时刻": sm.taken, "misc operations": sm.misc_operations, "pcs-migration": (sm.scheduler || {})["pcs-migration"], "特殊同步上下文": (sm.special_contexts || []).join(", ") });
+  $("#boot").innerHTML = Object.entries(sm.boot_history || {}).map(([k, v]) => `<div class="desc" style="margin:6px 0 2px;font-family:var(--mono)">${esc(k)}</div>${v.map(l => `<div style="font-family:var(--mono);font-size:11.5px">${esc(l)}</div>`).join("")}`).join("") || '<div class="empty">暂无</div>';
+  const qa = s.quota || {};
+  $("#account").innerHTML = kv({ "剩余配额": fmtBytes(qa.remaining) + (qa.remaining ? `（${fmtNum(qa.remaining)} 字节）` : ""), "brctl accounts": qa.accounts || "（无输出）", "client_state 缓存配额": fmtBytes(sm.available_quota) + "（" + ((sm.client_state || {}).lastQuotaFetchDate || "?") + " 抓取，可能过时）", "不可清除空间": fmtBytes(+((sm.client_state || {}).nonPurgeableSpace)), "可清除空间": fmtBytes(+((sm.client_state || {}).purgeableSpace)), "推送环境": (sm.scheduler || {})["push environment"] });
+  const xc = {}; (sm.xpc_clients || []).forEach(x => xc[x] = (xc[x] || 0) + 1);
+  hbars($("#xpc"), Object.entries(xc).map(([k, v]) => ({ label: k, value: v })).sort((a, b) => b.value - a.value), { color: "--s3" });
+  const devFiles = Object.fromEntries((IT && IT.client.devices) || []);
+  $("#devices").innerHTML = table([{ h: "#", f: r => r.id, num: true }, { h: "设备名（脱敏）", f: r => r.name }, { h: "该设备写入的文件", f: r => devFiles[r.id] ? fmtNum(devFiles[r.id]) : "", num: true }], sm.devices || []);
+  const ses = (s.dbfiles || {}).session || [];
+  $("#session").innerHTML = table([{ h: "名称", f: r => r.name + (r.dir ? "/" : ""), mono: true }, { h: "大小", f: r => r.dir ? "目录" : fmtBytes(r.size), num: true }, { h: "修改", f: r => ago(r.mtime, s.now), num: true }], ses);
+}
+
+function renderDbFiles() {
+  const s = ST, f = (s.dbfiles || {}).files || [];
+  $("#dbDir").textContent = "只 stat：" + ((s.dbfiles || {}).dir || "");
+  $("#dbFiles").innerHTML = table([{ h: "文件", f: r => r.name, mono: true }, { h: "大小", f: r => fmtBytes(r.size), num: true }, { h: "修改", f: r => ago(r.mtime, s.now), num: true }, { h: "时间", f: r => dstr(r.mtime), num: true }], f);
+}
+
+function renderSafety() {
+  const s = ST;
+  const P = [
+    ["从不打开数据库文件", "client.db / server.db 只做 stat()（看大小和时间），不用 sqlite 打开、不复制、不读取内容。"],
+    ["库内容由 bird 自己交出", "条目信息来自 brctl dump，它通过 XPC 请求正在运行的 bird 读库并输出（dump 头部写着 from: running bird）。"],
+    ["禁用危险参数", "绝不使用 dump -d（直接读库文件）、dump -u（升级数据库）以及 diagnose 等会写盘或打包的命令。"],
+    ["只读命令", "ps、nettop、lsof、/usr/bin/log、brctl status/quota/accounts/dump，以及 libproc 的 proc_pid_rusage（读进程计数器）。"],
+    ["不打扰 bird", `所有 brctl 调用串行执行；概要每 ${(s.intervals || {}).summary || 60} 秒一次（约 1 秒），完整 dump 每 ${((s.intervals || {}).full || 3600) / 60} 分钟一次（bird 满载约 20 秒，图上黄色阴影标出），可手动触发；brctl quota 会让 bird 向 iCloud 发一次配额请求，所以只 ${((s.intervals || {}).quota || 1800) / 60} 分钟查一次，并在操作列表里标为「本监控器触发」。`],
+    ["不外传", "HTTP 只监听 127.0.0.1；数据只在内存中；push token、change token、record name 在展示前隐藏。"],
+  ];
+  $("#principles").innerHTML = P.map(([t, m]) => `<div class="check"><div class="ico ok">✓</div><div><div class="t">${esc(t)}</div><div class="m">${esc(m)}</div></div></div>`).join("");
+  $("#cmds").innerHTML = table([{ h: "命令", f: r => r.cmd, mono: true }, { h: "次数", f: r => fmtNum(r.n), num: true }], s.commands || []);
+  const nm = { proc: "进程计数器", net: "网络 nettop", files: "数据库文件 stat", lsof: "打开的文件 lsof", status: "brctl status", summary: "brctl dump -i", quota: "brctl quota/accounts", full: "完整 brctl dump" };
+  $("#intervals").innerHTML = kv(Object.fromEntries(Object.entries(s.intervals || {}).map(([k, v]) => [nm[k] || k, v >= 60 ? v / 60 + " 分钟" : v + " 秒"])));
+  const errs = s.errors || {};
+  $("#selfErr").innerHTML = Object.keys(errs).length ? Object.entries(errs).map(([k, v]) => `<div class="check"><div class="ico warn">!</div><div><div class="t">${esc(k)}</div><pre class="raw" style="max-height:140px">${esc(v.msg)}</pre></div></div>`).join("")
+    : `<div class="check"><div class="ico ok">✓</div><div><div class="t">所有采集器正常</div><div class="m">日志流：${(s.log_stream || {}).running ? "运行中" : "重连中"}；服务已运行 ${dur(s.now - s.started)}</div></div></div>`;
+}
+
+let libQ = "";
+function renderLibs() {
+  const libs = (ST.summary || {}).app_libraries || [];
+  const cont = {}; ((IT && IT.client.containers) || []).forEach(c => cont[c.id] = c);
+  const q = libQ.toLowerCase();
+  const rows = libs.filter(l => !q || JSON.stringify(l).toLowerCase().includes(q)).sort((a, b) => ((cont[b.id] || {}).count || 0) - ((cont[a.id] || {}).count || 0));
+  $("#libCount").textContent = `${rows.length} / ${libs.length} 个资料库（按条目数排序）`;
+  const key = q + rows.length + itemsVer;
+  if ($("#libs").dataset.key === key) return; $("#libs").dataset.key = key;
+  $("#libs").innerHTML = table([
+    { h: "ID", f: r => r.id, num: true },
+    { h: "资料库", f: r => r.name, mono: true },
+    { h: "条目", f: r => fmtNum((cont[r.id] || {}).count), num: true },
+    { h: "占用", f: r => fmtBytes((cont[r.id] || {}).bytes), num: true },
+    { h: "状态标记", html: true, f: r => `<span class="flag b">${esc(r.state)}</span>` + r.flags.map(x => `<span class="flag">${esc(x)}</span>`).join("") + r.zone_flags.map(x => `<span class="flag b">${esc(x)}</span>`).join("") },
+    { h: "App（版本）", f: r => r.apps.join("；"), mono: true },
+    { h: "metadata", f: r => r.metadata },
+  ], rows);
+}
+
+function renderCharts() {
+  if (!HI) return;
+  const fmtPct = v => v.toFixed(v < 10 ? 1 : 0) + "%";
+  lineChart($("#chCpu"), Object.keys(PROC_COLOR).map(n => ({ name: n, color: PROC_COLOR[n], points: HI["cpu." + n] || [] })), { fmt: fmtPct, minMax: 5, bands: bandsNow() });
+  lineChart($("#chMem"), Object.keys(PROC_COLOR).map(n => ({ name: n, color: PROC_COLOR[n], points: HI["mem." + n] || [] })), { fmt: v => fmtBytes(v, 0) });
+  lineChart($("#chNet"), [{ name: "下行", color: "--s1", points: HI["net.in"] || [] }, { name: "上行", color: "--s2", points: HI["net.out"] || [] }], { fmt: v => fmtRate(v), minMax: 1024 });
+  lineChart($("#chIO"), [{ name: "读", color: "--s1", points: HI["io.read"] || [] }, { name: "写", color: "--s2", points: HI["io.write"] || [] }], { fmt: v => fmtRate(v), minMax: 1024, bands: bandsNow() });
+  lineChart($("#chWal"), [{ name: "client.db-wal", color: "--s1", points: HI["wal.client"] || [] }, { name: "server.db-wal", color: "--s2", points: HI["wal.server"] || [] }], { fmt: v => fmtBytes(v), minMax: 1e6 });
+}
+function hoursAgo(s) {
+  const m = /^([\d.]+)h ago$/.exec(s || "");
+  if (!m) return s || "";
+  const h = +m[1]; return h >= 48 ? `${Math.round(h / 24)} 天前` : `${h.toFixed(1)} 小时前`;
+}
+function bandsNow() {
+  const w = ((ST || {}).dump_windows || []).slice();
+  if (ST && ST.full_running && ST.full_started) w.push([ST.full_started, ST.now]);
+  return w;
+}
+function renderLogChart() {
+  const m = (ST.logstats || {}).minutes || [];
+  const lv = [["fault", "故障", "--critical"], ["error", "错误", "--serious"], ["warning", "警告", "--warning"], ["default", "默认", "--s1"], ["info", "信息", "--neutral-fill"]];
+  barChart($("#chLog"), m.map(x => x[0]), lv.map(([k, n, c]) => ({ name: n, color: c, values: m.map(x => x[1][k] || 0) })),
+    { tickFmt: t => tstr(t).slice(0, 5), tipTitle: t => tstr(t).slice(0, 5) + " 这一分钟", maxTicks: 6 });
+}
+
+function renderItems() {
+  if (!IT) return;
+  const c = IT.client, sv = IT.server, s = ST || { now: Date.now() / 1000 };
+  $("#dbNote").innerHTML = `client.db / server.db 的内容通过 <code>brctl dump</code> 由正在运行的 bird 自己读取后输出，本工具从不打开数据库文件。本次快照：${dstr(IT.taken)}，bird 输出 ${fmtBytes(IT.dump_bytes)}（${fmtNum(IT.dump_lines)} 行），dump 耗时 ${IT.took_dump}s，解析 ${IT.took_parse}s。`;
+  const tiles = [
+    ["client.db 条目", fmtNum(c.total), `文件 ${fmtNum((c.by_type.doc || 0) + (c.by_type.pkg || 0))} · 目录 ${fmtNum(c.by_type.dir)}`],
+    ["server.db 条目", fmtNum(sv.total), `文件 ${fmtNum((sv.by_type.doc || 0) + (sv.by_type.pkg || 0))} · 目录 ${fmtNum(sv.by_type.dir)}`],
+    ["iCloud Drive 总量", fmtBytes(c.bytes), "client.db 中全部文件大小之和"],
+    ["资料库", fmtNum(c.containers.length), "有条目的容器数"],
+    ["待上传", fmtNum((c.up_states || {})["needs-sync-up"] || 0), "up:needs-sync-up"],
+    ["仅本地 / 仅服务器", `${fmtNum(IT.diff.only_client_total)} / ${fmtNum(IT.diff.only_server_total)}`, "按条目 ID 比较"],
+  ];
+  $("#dbTiles").innerHTML = tiles.map(([k, v, sub]) => `<div class="tile"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div><div class="s">${esc(sub)}</div></div>`).join("");
+  const tc = { doc: "--s1", dir: "--s2", root: "--s3", symlink: "--s4", pkg: "--s5" };
+  const tn = { doc: "文件", dir: "目录", root: "虚拟根", symlink: "符号链接", pkg: "包" };
+  const comp = b => Object.entries(b).map(([k, v]) => ({ label: tn[k] || k, value: v, color: tc[k] || "--s8" }));
+  $("#composition").innerHTML = `<div class="desc" style="margin:0">client.db</div>${stackBar(comp(c.by_type))}<div class="desc" style="margin:10px 0 0">server.db</div>${stackBar(comp(sv.by_type))}`;
+  renderContainers(); renderExts();
+  const days = c.mtime_days;
+  barChart($("#chDays"), days.map(d => d[0]), [{ name: "修改的文件", color: "--s1", values: days.map(d => d[1]) }], { tickFmt: d => d.slice(5), maxTicks: 6 });
+  barChart($("#chSize"), c.size_hist.map(h => h.label), [{ name: "文件数", color: "--s3", values: c.size_hist.map(h => h.count) }],
+    { maxTicks: 8, extra: i => `<div class="row"><span>总占用</span><b>${fmtBytes(c.size_hist[i].bytes)}</b></div>` });
+  barChart($("#chMonths"), c.mtime_months.map(d => d[0]), [{ name: "修改的文件", color: "--s7", values: c.mtime_months.map(d => d[1]) }], { tickFmt: d => d.slice(2), maxTicks: 9 });
+  const devNames = {}; ((ST && ST.summary && ST.summary.devices) || []).forEach(d => devNames[d.id] = d.name);
+  $("#states").innerHTML =
+    `<div class="desc" style="margin:0">client.db 上传状态（up）</div>${stackBar(Object.entries(c.up_states || {}).map(([k, v], i) => ({ label: k, value: v, color: k === "idle" ? "--neutral-fill" : SERIES[i % 8] })))}` +
+    `<div class="desc" style="margin:10px 0 0">作用域（sc）</div>${stackBar(Object.entries(c.scopes || {}).map(([k, v], i) => ({ label: k, value: v, color: SERIES[i % 8] })))}` +
+    `<div class="desc" style="margin:10px 0 0">server.db PCS 标记</div>${stackBar(Object.entries(sv.pcs || {}).map(([k, v], i) => ({ label: "pcs:" + k, value: v, color: SERIES[i % 8] })))}` +
+    `<div class="desc" style="margin:10px 0 4px">文件来源设备（device）</div><div id="devBars"></div>` +
+    `<div class="desc" style="margin:10px 0 4px">隔离标记（quarantine）</div><div id="quarBars"></div>`;
+  hbars($("#devBars"), (c.devices || []).slice(0, 10).map(([k, v]) => ({ label: `#${k} ${devNames[k] || ""}`, value: v })), { color: "--s3" });
+  hbars($("#quarBars"), Object.entries(c.quarantine || {}).map(([k, v]) => ({ label: k, value: v })), { color: "--s4" });
+  $("#largest").innerHTML = table(fileCols([{ h: "修改", f: r => r.mt ? dstr(r.mt).slice(0, 10) : "—", num: true }]), c.largest);
+  $("#recent").innerHTML = table(fileCols([{ h: "修改", f: r => ago(r.mt, s.now), num: true }]), c.recent);
+  $("#recentUsed").innerHTML = table(fileCols([{ h: "最近使用", f: r => ago(r.lu, s.now), num: true }]), c.recent_used || []);
+  $("#trash").innerHTML = table(fileCols([{ h: "类型", f: r => tn[r.t] || r.t }]), c.trash || [], "废纸篓是空的");
+  // queues
+  const qk = IT.queues.by_kind;
+  hbars($("#qKinds"), Object.entries(qk).map(([k, v]) => ({ label: k, value: v })), { color: "--s2" });
+  if (!Object.keys(qk).length) $("#qKinds").innerHTML = '<div class="empty">没有挂起的子任务</div>';
+  $("#qRows").innerHTML = table([
+    { h: "任务", f: r => r.kind }, { h: "名称（脱敏）", f: r => r.n || r.id, mono: true }, { h: "类型", f: r => tn[r.t] || r.t },
+    { h: "资料库", f: r => r.cn, mono: true }, { h: "状态", f: r => r.state || "" }, { h: "尝试", f: r => r.attempts ?? "", num: true },
+    { h: "上次", f: r => hoursAgo(r.last), num: true }, { h: "下次", f: r => r.next || "" }, { h: "原文", f: r => r.detail, mono: true },
+  ], IT.queues.rows);
+  const df = IT.diff;
+  $("#diffSum").innerHTML = `<div class="tiles" style="grid-template-columns:repeat(2,1fr);margin-bottom:8px"><div class="tile"><div class="k">只在本地</div><div class="v">${fmtNum(df.only_client_total)}</div><div class="s">client 有、server 没有</div></div><div class="tile"><div class="k">只在服务器</div><div class="v">${fmtNum(df.only_server_total)}</div><div class="s">server 有、client 没有</div></div></div>` +
+    (df.containers.length ? `<div class="desc">涉及 ${df.containers.length} 个资料库</div>` : '<div class="empty">两边完全一致</div>');
+  const dcols = [{ h: "名称（脱敏）", f: r => r.n || r.id, mono: true }, { h: "类型", f: r => tn[r.t] || r.t }, { h: "资料库", f: r => r.cn, mono: true }, { h: "状态", f: r => r.up || "" }, { h: "子任务", f: r => (r.subs || []).join(",") }];
+  $("#onlyClient").innerHTML = table(dcols, df.only_client, "没有");
+  $("#onlyServer").innerHTML = table(dcols, df.only_server, "没有");
+  renderLibs();
+}
+function renderContainers() {
+  if (!IT) return;
+  const rows = IT.client.containers.slice().sort((a, b) => b[contMode] - a[contMode]).slice(0, 20);
+  hbars($("#containers"), rows.map(r => ({ label: `${r.name}[${r.id}]`, value: r[contMode], sub: contMode === "count" ? fmtBytes(r.bytes) : fmtNum(r.count) + " 条" })), { fmt: contMode === "bytes" ? fmtBytes : fmtNum });
+}
+function renderExts() {
+  if (!IT) return;
+  const rows = IT.client.extensions.slice().sort((a, b) => b[extMode] - a[extMode]).slice(0, 15);
+  hbars($("#exts"), rows.map(r => ({ label: "." + r.ext, value: r[extMode], sub: extMode === "count" ? fmtBytes(r.bytes) : fmtNum(r.count) + " 个" })), { fmt: extMode === "bytes" ? fmtBytes : fmtNum, color: "--s7" });
+}
+
+/* ---------------- logs ---------------- */
+let logSeq = 0, logPaused = false; const LOGBUF = [];
+async function tickLogs() {
+  if (logPaused) return;
+  try {
+    const r = await j("/api/logs?after=" + logSeq);
+    if (r.rows.length) { LOGBUF.push(...r.rows); if (LOGBUF.length > 3000) LOGBUF.splice(0, LOGBUF.length - 3000); logSeq = r.rows.at(-1).seq; renderLogs(); }
+  } catch (e) { }
+}
+function renderLogs() {
+  if (!$("#tab-logs").classList.contains("on")) return;
+  const q = $("#logQ").value.toLowerCase();
+  const lv = new Set($$(".lvf").filter(x => x.checked).map(x => x.value)); lv.add("debug");
+  const rows = LOGBUF.filter(r => lv.has(r.lv) && (!q || (r.msg + r.cat + r.sub).toLowerCase().includes(q))).slice(-600).reverse();
+  const n = { fault: "故障", error: "错误", warning: "警告", default: "默认", info: "信息", debug: "调试" };
+  $("#logBody").innerHTML = rows.map(r => `<tr class="logrow"><td class="num">${esc(r.ts)}</td><td><span class="lvl ${r.lv}">${n[r.lv]}</span></td><td class="mono" title="${esc((r.sub ? r.sub + "/" : "") + r.cat)}">${esc((r.sub ? r.sub + "/" : "") + r.cat)}</td><td class="msg">${esc(r.msg)}</td></tr>`).join("");
+  $("#logInfo").textContent = `显示 ${rows.length} / 缓冲 ${LOGBUF.length} 条`;
+}
+
+/* ---------------- wiring ---------------- */
+function setTab() {
+  const t = (location.hash || "#overview").slice(1);
+  $$("section.tab").forEach(s => s.classList.toggle("on", s.id === "tab-" + t));
+  $$("#tabs a").forEach(a => a.classList.toggle("on", a.dataset.tab === t));
+  if (t === "logs") renderLogs();
+  requestAnimationFrame(() => { renderCharts(); if (ST) renderLogChart(); renderItems(); });
+}
+addEventListener("hashchange", setTab);
+$("#btnSummary").onclick = async () => { await fetch("/api/refresh?kind=summary", { method: "POST" }); await fetch("/api/refresh?kind=status", { method: "POST" }); setTimeout(tick, 1800); };
+$("#btnFull").onclick = async () => { await fetch("/api/refresh?kind=full", { method: "POST" }); $("#btnFull").disabled = true; };
+$("#btnTheme").onclick = () => {
+  const cur = document.documentElement.dataset.theme || (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light");
+  document.documentElement.dataset.theme = cur === "dark" ? "light" : "dark";
+  try { localStorage.setItem("bm-theme", document.documentElement.dataset.theme); } catch (e) { }
+  render(); renderCharts(); renderItems();
+};
+try { const t = localStorage.getItem("bm-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) { }
+$("#contMode").onclick = e => { const m = e.target.dataset.m; if (!m) return; contMode = m; $$("#contMode button").forEach(b => b.classList.toggle("on", b.dataset.m === m)); renderContainers(); };
+$("#extMode").onclick = e => { const m = e.target.dataset.m; if (!m) return; extMode = m; $$("#extMode button").forEach(b => b.classList.toggle("on", b.dataset.m === m)); renderExts(); };
+$("#libQ").oninput = e => { libQ = e.target.value; renderLibs(); };
+$("#logQ").oninput = renderLogs; $$(".lvf").forEach(x => x.onchange = renderLogs);
+$("#logPause").onclick = () => { logPaused = !logPaused; $("#logPause").textContent = logPaused ? "继续" : "暂停"; };
+$("#rawLoad").onclick = async () => { $("#rawBox").textContent = "载入中…"; $("#rawBox").textContent = await (await fetch("/api/raw?kind=" + $("#rawKind").value)).text(); };
+addEventListener("resize", () => { renderCharts(); if (ST) renderLogChart(); renderItems(); });
+
+setTab();
+tick(); tickHist(); tickLogs();
+setInterval(tick, 2000); setInterval(tickHist, 4000); setInterval(tickLogs, 2000);
+</script>
+</body>
+</html>
