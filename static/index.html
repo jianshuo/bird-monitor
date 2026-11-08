@@ -251,7 +251,7 @@ details summary { cursor: pointer; }
       <div class="card"><h3>client.db 上挂着的任务</h3><div class="desc">每个条目后面的 “&gt; xxx{…}” 子任务</div><div id="qKinds"></div></div>
       <div class="card"><h3>server.db ⇄ client.db 差异</h3><div class="desc">按条目 ID 逐容器比较（不计本地虚拟根）</div><div id="diffSum"></div></div>
     </div>
-    <div class="card" style="margin-bottom:14px"><h3>队列明细</h3><div class="desc">sync-up：等待上传元数据或内容；downloader：等待/曾经下载</div><div id="qRows" class="scroll" style="max-height:520px"></div></div>
+    <div class="card" style="margin-bottom:14px"><h3>队列明细</h3><div class="desc">sync-up：等待上传元数据或内容；downloader：等待/曾经下载</div><div class="note" id="qNote" style="margin-bottom:8px"></div><div id="qRows" class="scroll" style="max-height:520px"></div></div>
     <div class="grid g2">
       <div class="card"><h3>只在本地（client）存在</h3><div id="onlyClient" class="scroll"></div></div>
       <div class="card"><h3>只在服务器（server）存在</h3><div id="onlyServer" class="scroll"></div></div>
@@ -488,6 +488,22 @@ function table(cols, rows, empty = "暂无") {
   if (!rows.length) return `<div class="empty">${empty}</div>`;
   return `<table><thead><tr>${cols.map(c => `<th class="${c.num ? "num" : ""}">${esc(c.h)}</th>`).join("")}</tr></thead><tbody>${rows.map(r => `<tr>${cols.map(c => `<td class="${c.num ? "num" : ""} ${c.mono ? "mono" : ""}">${c.html ? c.f(r) : esc(c.f(r))}</td>`).join("")}</tr>`).join("")}</tbody></table>`;
 }
+// 已核实的无害模式：App 资料库的空 Documents 占位目录（资料库标着 no-documents）。
+// 每台 Mac 建 iCloud 数据库时都会为账号里没存过文档的资料库生成它们，bird 主动跳过，删不掉也不必删。
+let showBenign = false;
+try { showBenign = localStorage.getItem("bm-benign") === "show"; } catch (e) { }
+function isBenign(r) {
+  if (!r || r.kind && r.kind !== "sync-up") return false;
+  if (r.t !== "dir" || !String(r.id || "").startsWith("documents[") || r.sz) return false;
+  const lib = (((ST || {}).summary || {}).app_libraries || []).find(l => l.id === r.c);
+  return !!lib && lib.flags.includes("no-documents");
+}
+function queueSplit() {
+  const up = ((ST || {}).summary || {}).sync_up_scheduled || 0;
+  if (!IT) return { up, benign: 0, real: up, known: false };
+  const benign = IT.queues.rows.filter(isBenign).length;
+  return { up, benign, real: Math.max(0, up - benign), known: true };
+}
 let showReal = true;
 try { showReal = localStorage.getItem("bm-names") !== "redacted"; } catch (e) { }
 const CN = cn => (showReal && IT && IT.names && IT.names.containers[cn]) || cn || "";
@@ -552,7 +568,7 @@ function render() {
     ["CPU", (bird.cpu ?? 0).toFixed(1) + "%", `累计 ${dur(bird.cpu_total_s)} · ${bird.threads ?? "—"} 线程`],
     ["内存占用", fmtBytes(bird.footprint), `唤醒 ${(bird.wakeups_rate ?? 0).toFixed(0)}/s`],
     ["磁盘 IO", fmtRate((bird.read_rate || 0) + (bird.write_rate || 0)), `累计读 ${fmtBytes(bird.read)} · 写 ${fmtBytes(bird.write)}`],
-    ["待上传", fmtNum(sm.sync_up_scheduled), "sync-up-scheduled", sm.sync_up_scheduled ? "warn" : "ok"],
+    (() => { const q = queueSplit(); return ["待上传", fmtNum(q.real), q.benign ? `另有 ${q.benign} 个无害占位（已隐藏）` : (q.known ? "sync-up" : "细分中…"), q.real ? "warn" : "ok"]; })(),
     ["近 10 分钟错误", fmtNum(ls.errors10m), `模式 ${(ls.patterns || []).length} 种`, ls.errors10m > 200 ? "crit" : ls.errors10m >= 20 ? "warn" : "ok"],
     ["最近同步", lsync ? ago(lsync, s.now) : "—", z["caught-up"] ? "已追平服务器" : (z.sync || ""), lsync && s.now - lsync > 6 * 3600 ? "warn" : "ok"],
     ["iCloud 剩余", fmtBytes(q), qLive != null ? "brctl quota 实时值" : "缓存值（可能过时），实时值查询中"],
@@ -561,7 +577,7 @@ function render() {
   $("#checks").innerHTML = (s.checks || []).map(c => `<div class="check"><div class="ico ${c.level}" aria-label="${lvName[c.level]}">${lvIco[c.level]}</div><div><div class="t">${esc(c.title)} <span class="lvl ${c.level === "ok" ? "info" : c.level === "warn" ? "warning" : "error"}">${lvName[c.level]}</span></div><div class="m">${esc(c.msg)}</div></div></div>`).join("");
   // badges
   const be = $("#bErr"); be.textContent = ls.errors10m ?? 0; be.className = "badge" + (ls.errors10m ? " hot" : "");
-  $("#bQ").textContent = sm.sync_up_scheduled ?? 0;
+  $("#bQ").textContent = queueSplit().real;
   $("#bLibs").textContent = (sm.app_libraries || []).length;
   renderDoing(); renderErrors(); renderSystem(); renderSafety(); renderDbFiles(); renderLibs();
   renderLogChart();
@@ -748,16 +764,21 @@ function renderItems() {
   const qk = IT.queues.by_kind;
   hbars($("#qKinds"), Object.entries(qk).map(([k, v]) => ({ label: k, value: v })), { color: "--s2" });
   if (!Object.keys(qk).length) $("#qKinds").innerHTML = '<div class="empty">没有挂起的子任务</div>';
+  const qb = IT.queues.rows.filter(isBenign).length;
+  const qrows = showBenign ? IT.queues.rows : IT.queues.rows.filter(r => !isBenign(r));
+  $("#qNote").innerHTML = qb ? `${showBenign ? "正在显示" : "已隐藏"} ${qb} 个无害占位（App 资料库的空 Documents 目录；账号层面的现象，每台 Mac 建库时都会生成，bird 主动跳过，删不掉也不必删）。 <label class="cb"><input type="checkbox" id="qShow" ${showBenign ? "checked" : ""}>显示它们</label>` : "";
+  const qs = $("#qShow"); if (qs) qs.onchange = e => { showBenign = e.target.checked; try { localStorage.setItem("bm-benign", showBenign ? "show" : "hide"); } catch (x) { } renderItems(); render(); };
   $("#qRows").innerHTML = table([
     { h: "任务", f: r => r.kind }, { h: nameH(), html: true, f: RN, mono: true }, { h: "类型", f: r => tn[r.t] || r.t },
     { h: "资料库", html: true, f: RC, mono: true }, { h: "本机路径", f: r => showReal ? (r.rpath || "") : "", mono: true }, { h: "状态", f: r => r.state || "" }, { h: "尝试", f: r => r.attempts ?? "", num: true },
     { h: "上次", f: r => hoursAgo(r.last), num: true }, { h: "下次", f: r => r.next || "" }, { h: "原文", f: r => r.detail, mono: true },
-  ], IT.queues.rows);
+  ], qrows, "没有需要关心的队列条目 🎉");
   const df = IT.diff;
   $("#diffSum").innerHTML = `<div class="tiles" style="grid-template-columns:repeat(2,1fr);margin-bottom:8px"><div class="tile"><div class="k">只在本地</div><div class="v">${fmtNum(df.only_client_total)}</div><div class="s">client 有、server 没有</div></div><div class="tile"><div class="k">只在服务器</div><div class="v">${fmtNum(df.only_server_total)}</div><div class="s">server 有、client 没有</div></div></div>` +
     (df.containers.length ? `<div class="desc">涉及 ${df.containers.length} 个资料库</div>` : '<div class="empty">两边完全一致</div>');
   const dcols = [{ h: nameH(), html: true, f: RN, mono: true }, { h: "类型", f: r => tn[r.t] || r.t }, { h: "资料库", html: true, f: RC, mono: true }, { h: "状态", f: r => r.up || "" }, { h: "子任务", f: r => (r.subs || []).join(",") }];
-  $("#onlyClient").innerHTML = table(dcols, df.only_client, "没有");
+  const oc = df.only_client.map(r => ({ ...r, kind: "sync-up" }));
+  $("#onlyClient").innerHTML = table(dcols, showBenign ? oc : oc.filter(r => !isBenign(r)), qb ? `只有 ${qb} 个无害占位（已隐藏）` : "没有");
   $("#onlyServer").innerHTML = table(dcols, df.only_server, "没有");
   renderLibs();
 }
